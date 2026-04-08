@@ -1,5 +1,4 @@
 import json
-import random
 from datetime import datetime, timezone
 from html import escape
 from math import floor
@@ -34,10 +33,6 @@ CANDLE_PAYLOAD_FIELDS = (
 CANDLE_TIMEFRAMES = {
     "M1": 60,
 }
-DEMO_COMMAND_PROBABILITY = 1 / 120
-DEMO_COMMAND_LOT = 0.01
-
-
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -59,23 +54,6 @@ def candle_close_time(open_time: int, timeframe: str) -> int:
         return open_time + CANDLE_TIMEFRAMES[timeframe]
     except KeyError as exc:
         raise ValueError(f"Unsupported candle timeframe '{timeframe}'.") from exc
-
-
-def decide_demo_command(trades: list[dict]) -> dict:
-    if random.random() >= DEMO_COMMAND_PROBABILITY:
-        return {"action": "NONE"}
-    if trades:
-        return {
-            "action": "CLOSE",
-            "reason": "demo_random_close_when_trade_exists",
-        }
-    side = random.choice(["BUY", "SELL"])
-    return {
-        "action": "OPEN",
-        "side": side,
-        "lot": DEMO_COMMAND_LOT,
-        "reason": "demo_random_open_when_no_trade_exists",
-    }
 
 
 def normalize_trade(raw_trade: dict) -> dict:

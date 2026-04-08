@@ -104,7 +104,17 @@ Azioni supportate:
 
 L'EA esegue il comando sempre sul simbolo del chart corrente, senza leggere un simbolo dalla risposta del server. Questo evita di cablare nomi broker-specifici come `XAUUSD`, `XAUUSD.s` o `XAUUSD.p`.
 
-Nello stato attuale la logica decisionale del server e` solo demo: circa una volta ogni 30 secondi prova ad aprire un trade `BUY` se non ce ne sono, oppure a chiudere i trade aperti se ce n'e` almeno uno.
+Nello stato attuale la logica decisionale del server e` solo demo: circa una volta ogni 80 secondi prova ad aprire un trade `BUY` o `SELL` se non ce ne sono, oppure a chiudere i trade aperti se ce n'e` almeno uno.
+
+## Strategia
+
+La funzione decisionale dei trade vive in [trade_monitor/strategy.py](/Users/virgilio/Documents/Code/freqtrade/eas/trade_monitor/strategy.py).
+
+Entry point attuale:
+
+- `decide_trade_command(trades)`
+
+Per ora implementa ancora una logica demo/random, ma il modulo e` separato dal server ed e` il punto previsto per la logica production-ready futura.
 
 ## Installazione EA in MT4
 

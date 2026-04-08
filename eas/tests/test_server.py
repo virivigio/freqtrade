@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import server
+from trade_monitor.strategy import DEFAULT_COMMAND_LOT, decide_trade_command
 
 
 def sample_trade(
@@ -169,21 +170,21 @@ class ServerFunctionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_decide_demo_command_returns_none_when_probability_not_met(self) -> None:
-        with patch("trade_monitor.core.random.random", return_value=0.9):
-            command = server.decide_demo_command([])
+    def test_decide_trade_command_returns_none_when_probability_not_met(self) -> None:
+        with patch("trade_monitor.strategy.random.random", return_value=0.9):
+            command = decide_trade_command([])
         self.assertEqual(command, {"action": "NONE"})
 
-    def test_decide_demo_command_opens_without_trades_and_closes_with_trades(self) -> None:
-        with patch("trade_monitor.core.random.random", return_value=0.0), patch(
-            "trade_monitor.core.random.choice", return_value="SELL"
+    def test_decide_trade_command_opens_without_trades_and_closes_with_trades(self) -> None:
+        with patch("trade_monitor.strategy.random.random", return_value=0.0), patch(
+            "trade_monitor.strategy.random.choice", return_value="SELL"
         ):
-            open_command = server.decide_demo_command([])
-            close_command = server.decide_demo_command([sample_trade(1)])
+            open_command = decide_trade_command([])
+            close_command = decide_trade_command([sample_trade(1)])
 
         self.assertEqual(open_command["action"], "OPEN")
         self.assertEqual(open_command["side"], "SELL")
-        self.assertEqual(open_command["lot"], server.DEMO_COMMAND_LOT)
+        self.assertEqual(open_command["lot"], DEFAULT_COMMAND_LOT)
         self.assertEqual(close_command["action"], "CLOSE")
 
     def test_render_dashboard_fragments_contains_live_sections(self) -> None:
@@ -230,6 +231,7 @@ class ServerFunctionTests(unittest.TestCase):
         self.assertIn("Ultima Chiamata", fragments["hero_info_html"])
         self.assertIn("Ultimo errore API", fragments["hero_info_html"])
         self.assertIn("Disabilita Apertura Trade", fragments["hero_info_html"])
+        self.assertIn("Side", fragments["trade_table_html"])
         self.assertIn("Ticket", fragments["trade_table_html"])
         self.assertIn("Ultimo prezzo", fragments["price_chart_html"])
         self.assertIn("Finestra: <strong>60 minuti</strong>", fragments["candle_chart_html"])
@@ -244,6 +246,7 @@ class ServerFunctionTests(unittest.TestCase):
 
         self.assertNotIn("Nessun trade chiuso", html)
         self.assertIn(">1004<", html)
+        self.assertIn(">BUY<", html)
         self.assertNotIn("UPDATE", html)
         self.assertNotIn("OPEN", html)
 

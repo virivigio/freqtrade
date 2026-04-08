@@ -5,8 +5,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import urlparse
 
-from trade_monitor.core import DB_PATH, DEMO_COMMAND_LOT, HOST, PORT, decide_demo_command, parse_payload
+from trade_monitor.core import DB_PATH, HOST, PORT, parse_payload
 from trade_monitor.dashboard import render_dashboard_fragments, render_homepage, render_recent_trades_table
+from trade_monitor.strategy import decide_trade_command
 from trade_monitor.store import TradeStore
 
 
@@ -59,7 +60,7 @@ class TradeRequestHandler(BaseHTTPRequestHandler):
             payload = parse_payload(body)
             trades = payload["trades"]
             candles = payload.get("candles", [])
-            command = decide_demo_command(trades) if store.get_commands_enabled() else {"action": "NONE"}
+            command = decide_trade_command(trades) if store.get_commands_enabled() else {"action": "NONE"}
             result = {
                 "trades": store.ingest_trade_list(trades),
                 "candles": store.ingest_candles(candles),

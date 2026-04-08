@@ -136,7 +136,7 @@ class HttpEndpointTests(unittest.TestCase):
             headers={"Content-Length": str(len(body))},
         )
 
-        with patch("trade_monitor.core.random.random", return_value=0.0):
+        with patch("trade_monitor.strategy.random.random", return_value=0.0):
             handler.do_POST()
 
         payload = self.read_json_body(handler)
@@ -183,7 +183,7 @@ class HttpEndpointTests(unittest.TestCase):
             body=body,
             headers={"Content-Length": str(len(body))},
         )
-        with patch("trade_monitor.core.random.random", return_value=0.0):
+        with patch("trade_monitor.strategy.random.random", return_value=0.0):
             handler.do_POST()
 
         payload = self.read_json_body(handler)

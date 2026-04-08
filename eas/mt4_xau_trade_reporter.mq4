@@ -126,17 +126,26 @@ string CandleTimeframeToString(int timeframe)
 }
 
 
+datetime BrokerTimeToUtc(datetime brokerTime)
+{
+   int brokerOffsetSeconds = (int)(TimeCurrent() - TimeGMT());
+   return brokerTime - brokerOffsetSeconds;
+}
+
+
 string CandleToJson(string symbol, int timeframe, int shift)
 {
    datetime openTime = iTime(symbol, timeframe, shift);
    if(openTime <= 0)
       return "";
 
+   datetime openTimeUtc = BrokerTimeToUtc(openTime);
+
    int digits = (int)MarketInfo(symbol, MODE_DIGITS);
    string json = "{";
    json += "\"symbol\":\"" + JsonEscape(symbol) + "\",";
    json += "\"timeframe\":\"" + CandleTimeframeToString(timeframe) + "\",";
-   json += "\"open_time\":" + IntegerToString((int)openTime) + ",";
+   json += "\"open_time\":" + IntegerToString((int)openTimeUtc) + ",";
    json += "\"open\":" + DoubleToString(iOpen(symbol, timeframe, shift), digits) + ",";
    json += "\"high\":" + DoubleToString(iHigh(symbol, timeframe, shift), digits) + ",";
    json += "\"low\":" + DoubleToString(iLow(symbol, timeframe, shift), digits) + ",";

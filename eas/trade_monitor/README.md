@@ -10,10 +10,13 @@ Moduli interni del server.
   Schema SQLite e accesso ai dati.
 - `dashboard.py`
   Rendering HTML/SVG della homepage e dei frammenti live usati da `/api/dashboard`.
+- `strategy.py`
+  Logica decisionale dei comandi di trading restituiti a MT4.
 
 ## Regola Pratica
 
 - Se cambi schema o persistenza, tocca prima `store.py`.
 - Se cambi il protocollo request/response, tocca prima `core.py` e poi `server.py`.
+- Se cambi la logica di apertura/chiusura trade, tocca `strategy.py`.
 - Se cambi layout o grafici, tocca `dashboard.py`.
 - `server.py` deve restare un entrypoint sottile.

@@ -110,3 +110,14 @@ Impatto:
 - circa una volta ogni 30 secondi il server restituisce un comando diverso da `NONE`
 - se non ci sono trade, il comando demo apre un `BUY`
 - se c'e` almeno un trade, il comando demo prova a chiuderlo
+
+## 2026-04-09 - Strategia Di Trading In Modulo Separato
+
+Decisione: la funzione che decide i comandi di trading vive in un file dedicato, separato da server, persistenza e dashboard.
+
+Motivo: isolare la logica decisionale e preparare il passaggio da strategia demo a strategia reale senza toccare il server HTTP.
+
+Impatto:
+
+- il punto di ingresso della decisione e` `trade_monitor/strategy.py`
+- `server.py` usa il risultato della strategia ma non contiene piu` la logica decisionale
