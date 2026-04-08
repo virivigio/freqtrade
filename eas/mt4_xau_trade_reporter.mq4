@@ -2,6 +2,7 @@
 
 input string ServerUrl = "http://127.0.0.1/api/trades";
 input int TimerSeconds = 1;
+input int CandleCount = 10;
 
 
 string WebRequestErrorText(int errorCode)
@@ -74,6 +75,78 @@ string TradeToJson(int index)
 }
 
 
+string CandleTimeframeToString(int timeframe)
+{
+   switch(timeframe)
+   {
+      case PERIOD_M1:  return "M1";
+      case PERIOD_M5:  return "M5";
+      case PERIOD_M15: return "M15";
+      case PERIOD_M30: return "M30";
+      case PERIOD_H1:  return "H1";
+      case PERIOD_H4:  return "H4";
+      case PERIOD_D1:  return "D1";
+      default:         return "UNKNOWN";
+   }
+}
+
+
+string CandleToJson(string symbol, int timeframe, int shift)
+{
+   datetime openTime = iTime(symbol, timeframe, shift);
+   if(openTime <= 0)
+      return "";
+
+   int digits = (int)MarketInfo(symbol, MODE_DIGITS);
+   string json = "{";
+   json += "\"symbol\":\"" + JsonEscape(symbol) + "\",";
+   json += "\"timeframe\":\"" + CandleTimeframeToString(timeframe) + "\",";
+   json += "\"open_time\":" + IntegerToString((int)openTime) + ",";
+   json += "\"open\":" + DoubleToString(iOpen(symbol, timeframe, shift), digits) + ",";
+   json += "\"high\":" + DoubleToString(iHigh(symbol, timeframe, shift), digits) + ",";
+   json += "\"low\":" + DoubleToString(iLow(symbol, timeframe, shift), digits) + ",";
+   json += "\"close\":" + DoubleToString(iClose(symbol, timeframe, shift), digits) + ",";
+   json += "\"volume\":" + IntegerToString((int)iVolume(symbol, timeframe, shift)) + ",";
+   json += "\"is_closed\":" + (shift == 0 ? "false" : "true");
+   json += "}";
+   return json;
+}
+
+
+string BuildCandlesJson()
+{
+   string symbol = Symbol();
+   int timeframe = PERIOD_M1;
+   int availableBars = iBars(symbol, timeframe);
+   int maxCandles = CandleCount;
+
+   if(maxCandles < 2)
+      maxCandles = 2;
+
+   if(availableBars < maxCandles)
+      maxCandles = availableBars;
+
+   string json = "[";
+   bool first = true;
+
+   for(int shift = maxCandles - 1; shift >= 0; shift--)
+   {
+      string candleJson = CandleToJson(symbol, timeframe, shift);
+      if(candleJson == "")
+         continue;
+
+      if(!first)
+         json += ",";
+
+      json += candleJson;
+      first = false;
+   }
+
+   json += "]";
+   return json;
+}
+
+
 string BuildPayload()
 {
    string body = "{\"trades\":[";
@@ -92,7 +165,9 @@ string BuildPayload()
       first = false;
    }
 
-   body += "]}";
+   body += "],\"candles\":";
+   body += BuildCandlesJson();
+   body += "}";
    return body;
 }
 

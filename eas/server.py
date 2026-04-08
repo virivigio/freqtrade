@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from html import escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from math import floor
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -29,6 +30,15 @@ EVENT_DIFF_FIELDS = (
     "stop_loss",
     "take_profit",
 )
+CANDLE_PAYLOAD_FIELDS = (
+    "open",
+    "high",
+    "low",
+    "close",
+)
+CANDLE_TIMEFRAMES = {
+    "M1": 60,
+}
 
 
 def utc_now() -> str:
@@ -45,6 +55,13 @@ def format_timestamp_for_table(value: str) -> str:
 
 def format_timestamp_for_header(value: str) -> str:
     return f"{format_timestamp_for_table(value)} ora italiana"
+
+
+def candle_close_time(open_time: int, timeframe: str) -> int:
+    try:
+        return open_time + CANDLE_TIMEFRAMES[timeframe]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported candle timeframe '{timeframe}'.") from exc
 
 
 class TradeStore:
@@ -118,6 +135,42 @@ class TradeStore:
 
                 CREATE INDEX IF NOT EXISTS idx_api_errors_time
                 ON api_errors(created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS closed_candles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    open_time INTEGER NOT NULL,
+                    close_time INTEGER NOT NULL,
+                    open REAL NOT NULL,
+                    high REAL NOT NULL,
+                    low REAL NOT NULL,
+                    close REAL NOT NULL,
+                    volume INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(symbol, timeframe, open_time)
+                );
+
+                CREATE TABLE IF NOT EXISTS current_candle_states (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    candle_open_time INTEGER NOT NULL,
+                    captured_at TEXT NOT NULL,
+                    open REAL NOT NULL,
+                    high REAL NOT NULL,
+                    low REAL NOT NULL,
+                    close REAL NOT NULL,
+                    volume INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_closed_candles_lookup
+                ON closed_candles(symbol, timeframe, open_time DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_current_candle_states_lookup
+                ON current_candle_states(symbol, timeframe, candle_open_time, captured_at DESC);
                 """
             )
             connection.commit()
@@ -197,6 +250,84 @@ class TradeStore:
                 "closed": closed,
                 "unchanged": len(trades) - inserted - updated,
             }
+
+    def ingest_candles(self, candles: list[dict]) -> dict:
+        normalized = [normalize_candle(item) for item in candles]
+        closed_candles = sorted(
+            (candle for candle in normalized if candle["is_closed"]),
+            key=lambda candle: candle["open_time"],
+        )
+        current_candles = [candle for candle in normalized if not candle["is_closed"]]
+
+        if len(current_candles) > 1:
+            raise ValueError("Payload must include at most one current candle.")
+
+        inserted_closed = 0
+        inserted_current_states = 0
+
+        with closing(self._connect()) as connection:
+            for candle in closed_candles:
+                cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO closed_candles (
+                        symbol, timeframe, open_time, close_time,
+                        open, high, low, close, volume, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        candle["symbol"],
+                        candle["timeframe"],
+                        candle["open_time"],
+                        candle_close_time(candle["open_time"], candle["timeframe"]),
+                        candle["open"],
+                        candle["high"],
+                        candle["low"],
+                        candle["close"],
+                        candle["volume"],
+                        json.dumps(candle, sort_keys=True),
+                        utc_now(),
+                    ),
+                )
+                inserted_closed += cursor.rowcount
+
+            if current_candles:
+                candle = current_candles[0]
+                connection.execute(
+                    """
+                    DELETE FROM current_candle_states
+                    WHERE symbol = ? AND timeframe = ? AND candle_open_time != ?
+                    """,
+                    (candle["symbol"], candle["timeframe"], candle["open_time"]),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO current_candle_states (
+                        symbol, timeframe, candle_open_time, captured_at,
+                        open, high, low, close, volume, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        candle["symbol"],
+                        candle["timeframe"],
+                        candle["open_time"],
+                        utc_now(),
+                        candle["open"],
+                        candle["high"],
+                        candle["low"],
+                        candle["close"],
+                        candle["volume"],
+                        json.dumps(candle, sort_keys=True),
+                    ),
+                )
+                inserted_current_states = 1
+
+            connection.commit()
+
+        return {
+            "received_candles": len(candles),
+            "inserted_closed_candles": inserted_closed,
+            "inserted_current_candle_states": inserted_current_states,
+        }
 
     def record_api_call(self, path: str, remote_addr: str, payload: object, result: dict) -> None:
         trade_count = 0
@@ -362,6 +493,43 @@ class TradeStore:
                 (limit,),
             ).fetchall()
 
+    def fetch_recent_current_candle_states(self, limit: int = 60) -> list[sqlite3.Row]:
+        with closing(self._connect()) as connection:
+            latest = connection.execute(
+                """
+                SELECT symbol, timeframe, candle_open_time
+                FROM current_candle_states
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if latest is None:
+                return []
+            rows = connection.execute(
+                """
+                SELECT symbol, timeframe, candle_open_time, captured_at, open, high, low, close, volume
+                FROM current_candle_states
+                WHERE symbol = ? AND timeframe = ? AND candle_open_time = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (latest["symbol"], latest["timeframe"], latest["candle_open_time"], limit),
+            ).fetchall()
+            return list(reversed(rows))
+
+    def fetch_recent_closed_candles(self, limit: int = 60) -> list[sqlite3.Row]:
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT symbol, timeframe, open_time, close_time, open, high, low, close, volume
+                FROM closed_candles
+                ORDER BY open_time DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return list(reversed(rows))
+
 
 def row_to_trade(row: dict) -> dict:
     return {
@@ -396,7 +564,47 @@ def normalize_trade(raw_trade: dict) -> dict:
     return normalized
 
 
-def parse_payload(body: bytes) -> list[dict]:
+def normalize_candle(raw_candle: dict) -> dict:
+    if not isinstance(raw_candle, dict):
+        raise ValueError("Each candle must be an object.")
+
+    symbol = str(raw_candle.get("symbol", ""))
+    timeframe = str(raw_candle.get("timeframe", ""))
+
+    if not symbol:
+        raise ValueError("Candle field 'symbol' is required.")
+    if timeframe not in CANDLE_TIMEFRAMES:
+        raise ValueError("Candle field 'timeframe' is required and must be supported.")
+
+    try:
+        open_time = int(raw_candle["open_time"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Candle field 'open_time' is required and must be an integer.") from exc
+
+    normalized = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "open_time": open_time,
+    }
+    for field in CANDLE_PAYLOAD_FIELDS:
+        try:
+            normalized[field] = float(raw_candle[field])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Candle field '{field}' is required and must be numeric.") from exc
+
+    try:
+        normalized["volume"] = int(raw_candle["volume"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Candle field 'volume' is required and must be an integer.") from exc
+
+    is_closed = raw_candle.get("is_closed")
+    if not isinstance(is_closed, bool):
+        raise ValueError("Candle field 'is_closed' is required and must be a boolean.")
+    normalized["is_closed"] = is_closed
+    return normalized
+
+
+def parse_payload(body: bytes) -> dict:
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -409,7 +617,175 @@ def parse_payload(body: bytes) -> list[dict]:
         raise ValueError("Payload must include a 'trades' array.")
     if not isinstance(trades, list):
         raise ValueError("'trades' must be an array.")
-    return trades
+
+    candles = payload.get("candles", [])
+    if not isinstance(candles, list):
+        raise ValueError("'candles' must be an array.")
+
+    return payload
+
+
+def format_compact_time_from_epoch(value: int) -> str:
+    return datetime.fromtimestamp(value, tz=timezone.utc).astimezone(ITALY_TZ).strftime("%H:%M:%S")
+
+
+def chart_bounds(values: list[float], padding_ratio: float = 0.08) -> tuple[float, float]:
+    minimum = min(values)
+    maximum = max(values)
+    if minimum == maximum:
+        pad = abs(minimum) * padding_ratio if minimum else 1.0
+        return minimum - pad, maximum + pad
+    pad = (maximum - minimum) * padding_ratio
+    return minimum - pad, maximum + pad
+
+
+def rounded_ten_bounds(values: list[float]) -> tuple[float, float]:
+    minimum = min(values)
+    maximum = max(values)
+    lower = floor(minimum / 10.0) * 10.0
+    upper = floor(maximum / 10.0) * 10.0
+    if upper < maximum:
+        upper += 10.0
+    if lower == upper:
+        upper += 10.0
+    return lower, upper
+
+
+def polyline_price_chart(rows: list[sqlite3.Row]) -> str:
+    if not rows:
+        return "<p class='meta'>Nessuno stato intra-minuto disponibile.</p>"
+
+    width = 1080
+    height = 280
+    padding_left = 54
+    padding_right = 18
+    padding_top = 18
+    padding_bottom = 34
+    values = [float(row["close"]) for row in rows]
+    min_value, max_value = rounded_ten_bounds(values)
+    usable_width = width - padding_left - padding_right
+    usable_height = height - padding_top - padding_bottom
+    step_x = usable_width / max(len(rows) - 1, 1)
+
+    def x_pos(index: int) -> float:
+        return padding_left + step_x * index
+
+    def y_pos(value: float) -> float:
+        return padding_top + (max_value - value) / (max_value - min_value) * usable_height
+
+    points = " ".join(f"{x_pos(i):.2f},{y_pos(value):.2f}" for i, value in enumerate(values))
+    last_price = values[-1]
+    last_y = y_pos(last_price)
+    label_indexes = sorted({0, len(rows) // 2, len(rows) - 1})
+    x_labels = "".join(
+        f"<text x='{x_pos(i):.2f}' y='{height - 10}' text-anchor='middle'>{escape(format_timestamp_for_table(rows[i]['captured_at']).split(' ')[1])}</text>"
+        for i in label_indexes
+    )
+    y_labels = []
+    tick_count = int((max_value - min_value) / 10.0) + 1
+    for tick in range(tick_count):
+        value = max_value - tick * 10.0
+        ratio = (max_value - value) / (max_value - min_value)
+        y = padding_top + usable_height * ratio
+        y_labels.append(
+            f"<text x='8' y='{y + 4:.2f}'>{format_price(value)}</text>"
+            f"<line x1='{padding_left}' y1='{y:.2f}' x2='{width - padding_right}' y2='{y:.2f}' class='chart-grid' />"
+        )
+
+    return (
+        f"<div class='chart-meta'>Ultimi punti: <strong>{len(rows)}</strong> | Ultimo prezzo: <strong>{format_price(last_price)}</strong></div>"
+        f"<svg viewBox='0 0 {width} {height}' class='chart-svg' role='img' aria-label='Grafico ultimo prezzo intra-minuto'>"
+        f"<line x1='{padding_left}' y1='{last_y:.2f}' x2='{width - padding_right}' y2='{last_y:.2f}' class='chart-last-line' />"
+        f"{''.join(y_labels)}"
+        f"<polyline points='{points}' fill='none' stroke='#9c6b1a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' />"
+        f"<circle cx='{x_pos(len(rows) - 1):.2f}' cy='{last_y:.2f}' r='4.5' fill='#9c6b1a' />"
+        f"{x_labels}"
+        "</svg>"
+    )
+
+
+def candlestick_chart(rows: list[sqlite3.Row]) -> str:
+    if not rows:
+        return "<p class='meta'>Nessuna candela chiusa disponibile.</p>"
+
+    latest_open_time = max(int(row["open_time"]) for row in rows)
+    slot_times = [latest_open_time - 60 * offset for offset in range(59, -1, -1)]
+    rows_by_open_time = {int(row["open_time"]): row for row in rows}
+    slotted_rows = [rows_by_open_time.get(open_time) for open_time in slot_times]
+
+    width = 1080
+    height = 320
+    padding_left = 54
+    padding_right = 18
+    padding_top = 18
+    padding_bottom = 34
+    values = []
+    for row in slotted_rows:
+        if row is not None:
+            values.extend([float(row["high"]), float(row["low"])])
+    min_value, max_value = rounded_ten_bounds(values)
+    usable_width = width - padding_left - padding_right
+    usable_height = height - padding_top - padding_bottom
+    candle_slot = usable_width / 60
+    candle_width = max(min(candle_slot * 0.58, 10), 3)
+
+    def x_center(index: int) -> float:
+        return padding_left + candle_slot * index + candle_slot / 2
+
+    def y_pos(value: float) -> float:
+        return padding_top + (max_value - value) / (max_value - min_value) * usable_height
+
+    candle_shapes = []
+    for index, row in enumerate(slotted_rows):
+        if row is None:
+            continue
+        center_x = x_center(index)
+        open_price = float(row["open"])
+        high_price = float(row["high"])
+        low_price = float(row["low"])
+        close_price = float(row["close"])
+        top = y_pos(max(open_price, close_price))
+        bottom = y_pos(min(open_price, close_price))
+        wick_top = y_pos(high_price)
+        wick_bottom = y_pos(low_price)
+        color = "#176b3a" if close_price >= open_price else "#9e2f21"
+        body_height = max(bottom - top, 1.5)
+        candle_shapes.append(
+            f"<line x1='{center_x:.2f}' y1='{wick_top:.2f}' x2='{center_x:.2f}' y2='{wick_bottom:.2f}' stroke='{color}' stroke-width='1.5' />"
+            f"<rect x='{center_x - candle_width / 2:.2f}' y='{top:.2f}' width='{candle_width:.2f}' height='{body_height:.2f}' fill='{color}' rx='1.5' />"
+        )
+
+    label_indexes = list(range(0, 60, 10))
+    x_labels = "".join(
+        f"<text x='{x_center(i):.2f}' y='{height - 10}' text-anchor='middle'>{escape(format_compact_time_from_epoch(slot_times[i])[:5])}</text>"
+        for i in label_indexes
+    )
+    x_grids = "".join(
+        f"<line x1='{x_center(i):.2f}' y1='{padding_top}' x2='{x_center(i):.2f}' y2='{height - padding_bottom}' class='chart-grid chart-grid-vertical' />"
+        for i in label_indexes
+    )
+    y_labels = []
+    tick_count = int((max_value - min_value) / 10.0) + 1
+    for tick in range(tick_count):
+        value = max_value - tick * 10.0
+        ratio = (max_value - value) / (max_value - min_value)
+        y = padding_top + usable_height * ratio
+        y_labels.append(
+            f"<text x='8' y='{y + 4:.2f}'>{format_price(value)}</text>"
+            f"<line x1='{padding_left}' y1='{y:.2f}' x2='{width - padding_right}' y2='{y:.2f}' class='chart-grid' />"
+        )
+
+    latest = rows_by_open_time[latest_open_time]
+    shown_count = sum(1 for row in slotted_rows if row is not None)
+    return (
+        f"<div class='chart-meta'>Finestra: <strong>60 minuti</strong> | Candele presenti: <strong>{shown_count}</strong> | Ultima chiusa: <strong>{format_price(float(latest['close']))}</strong></div>"
+        f"<svg viewBox='0 0 {width} {height}' class='chart-svg' role='img' aria-label='Grafico candele chiuse'>"
+        f"{''.join(y_labels)}"
+        f"{x_grids}"
+        f"{''.join(candle_shapes)}"
+        f"{x_labels}"
+        "</svg>"
+    )
 
 
 def render_homepage(store: TradeStore) -> str:
@@ -417,6 +793,8 @@ def render_homepage(store: TradeStore) -> str:
     recent_events = store.fetch_recent_events()
     last_api_call = store.fetch_last_api_call()
     recent_errors = store.fetch_recent_errors()
+    current_candle_states = store.fetch_recent_current_candle_states()
+    recent_closed_candles = store.fetch_recent_closed_candles()
 
     trade_rows = []
     for row in current_trades:
@@ -482,6 +860,9 @@ def render_homepage(store: TradeStore) -> str:
         errors_html = "".join(error_items)
     else:
         errors_html = "<p class='meta'>Nessun errore registrato.</p>"
+
+    price_chart_html = polyline_price_chart(current_candle_states)
+    candle_chart_html = candlestick_chart(recent_closed_candles)
 
     return f"""<!doctype html>
 <html lang="it">
@@ -554,6 +935,35 @@ def render_homepage(store: TradeStore) -> str:
       font-weight: 700;
     }}
     .error-body {{ padding: 0 14px 14px; }}
+    .chart-meta {{
+      margin-bottom: 10px;
+      color: #5a5247;
+      font-size: 14px;
+    }}
+    .chart-svg {{
+      display: block;
+      width: 100%;
+      min-width: 880px;
+      height: auto;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.9), rgba(244,233,216,0.7));
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }}
+    .chart-grid {{
+      stroke: rgba(156, 107, 26, 0.16);
+      stroke-width: 1;
+    }}
+    .chart-last-line {{
+      stroke: rgba(156, 107, 26, 0.4);
+      stroke-width: 1;
+      stroke-dasharray: 5 4;
+    }}
+    svg text {{
+      fill: #6b604f;
+      font-size: 11px;
+      font-family: Georgia, "Times New Roman", serif;
+    }}
   </style>
 </head>
 <body>
@@ -571,6 +981,14 @@ def render_homepage(store: TradeStore) -> str:
       <section>
         <h2>Ultimi Eventi</h2>
         {event_table}
+      </section>
+      <section>
+        <h2>Ultimo Prezzo Intra-Minuto</h2>
+        {price_chart_html}
+      </section>
+      <section>
+        <h2>Candele Chiuse</h2>
+        {candle_chart_html}
       </section>
       <section>
         <h2>Errori API</h2>
@@ -623,9 +1041,13 @@ class TradeRequestHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            payload = json.loads(payload_text)
-            trades = parse_payload(body)
-            result = store.ingest_trade_list(trades)
+            payload = parse_payload(body)
+            trades = payload["trades"]
+            candles = payload.get("candles", [])
+            result = {
+                "trades": store.ingest_trade_list(trades),
+                "candles": store.ingest_candles(candles),
+            }
             store.record_api_call(parsed.path, remote_addr, payload, result)
         except ValueError as exc:
             result = {"error": str(exc)}

@@ -61,3 +61,28 @@ Motivo: l'endpoint dell'EA resta corto e semplice, ad esempio `http://127.0.0.1/
 Tradeoff: su sistemi Unix l'avvio può richiedere privilegi elevati.
 
 Da ricordare: se la porta cambia, vanno aggiornati insieme `server.py`, configurazione EA e `README.md`.
+
+## 2026-04-08 - Invio Candele M1 Nel Payload
+
+Decisione: l'EA invia a ogni chiamata anche le ultime 10 candele `M1`.
+
+Motivo: coprire downtime brevi fino a circa 10 minuti senza dover reinviare una finestra molto ampia.
+
+Impatto:
+
+- il payload include 9 candele chiuse recenti e 1 candela corrente
+- il timeframe trattato lato server e` `M1`
+
+## 2026-04-08 - Persistenza Candele Chiuse E Stati Correnti
+
+Decisione: le candele chiuse vengono archiviate in storico con inserimento incrementale; la candela aperta viene registrata come serie di stati intra-minuto in una tabella separata e volatile.
+
+Motivo: mantenere lo storico definitivo delle barre chiuse e, allo stesso tempo, conservare l'evoluzione della barra corrente durante il minuto.
+
+Impatto:
+
+- `closed_candles` contiene una riga per candela chiusa
+- `current_candle_states` contiene molti snapshot della candela aperta corrente
+- quando cambia `open_time` della candela corrente, gli snapshot del minuto precedente possono essere eliminati
+
+Da ricordare: per le candele chiuse non si aggiorna il record esistente; i duplicati vengono ignorati.
