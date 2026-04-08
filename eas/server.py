@@ -807,21 +807,7 @@ def candlestick_chart(rows: list[sqlite3.Row]) -> str:
     )
 
 
-def render_dashboard_fragments(store: TradeStore) -> dict[str, str]:
-    current_candle_states = store.fetch_recent_current_candle_states()
-    recent_closed_candles = store.fetch_recent_closed_candles()
-    return {
-        "price_chart_html": polyline_price_chart(current_candle_states),
-        "candle_chart_html": candlestick_chart(recent_closed_candles),
-    }
-
-
-def render_homepage(store: TradeStore) -> str:
-    current_trades = store.fetch_current_trades()
-    recent_events = store.fetch_recent_events()
-    last_api_call = store.fetch_last_api_call()
-    recent_errors = store.fetch_recent_errors()
-
+def render_trade_table(current_trades: list[sqlite3.Row]) -> str:
     trade_rows = []
     for row in current_trades:
         trade_rows.append(
@@ -833,61 +819,79 @@ def render_homepage(store: TradeStore) -> str:
             f"<td>{format_price(row['profit'])}</td>"
             f"<td>{format_price(row['bid'])}</td>"
             f"<td>{format_price(row['ask'])}</td>"
-            f"<td>{escape(format_timestamp_for_table(row['updated_at']))}</td>"
             "</tr>"
         )
 
+    return (
+        "<table><thead><tr><th>Ticket</th><th>Apertura</th><th>SL</th><th>TP</th>"
+        "<th>Profit</th><th>Bid</th><th>Ask</th></tr></thead><tbody>"
+        + ("".join(trade_rows) if trade_rows else "<tr><td colspan='7'>Nessun trade aperto.</td></tr>")
+        + "</tbody></table>"
+    )
+
+
+def render_recent_trades_table(recent_events: list[sqlite3.Row]) -> str:
     event_rows = []
     for row in recent_events:
+        if row["event_type"] != "CLOSE":
+            continue
         event_rows.append(
             "<tr>"
             f"<td>{escape(format_timestamp_for_table(row['event_time']))}</td>"
-            f"<td>{escape(row['event_type'])}</td>"
             f"<td>{row['ticket']}</td>"
+            f"<td>{format_price(row['open_price'])}</td>"
             f"<td>{format_price(row['stop_loss'])}</td>"
             f"<td>{format_price(row['take_profit'])}</td>"
             f"<td>{format_price(row['profit'])}</td>"
-            f"<td>{format_price(row['bid'])}</td>"
-            f"<td>{format_price(row['ask'])}</td>"
             "</tr>"
         )
 
-    trade_table = (
-        "<table><thead><tr><th>Ticket</th><th>Apertura</th><th>SL</th><th>TP</th>"
-        "<th>Profit</th><th>Bid</th><th>Ask</th><th>Ultimo update</th></tr></thead><tbody>"
-        + ("".join(trade_rows) if trade_rows else "<tr><td colspan='8'>Nessun trade aperto.</td></tr>")
-        + "</tbody></table>"
-    )
-    event_table = (
-        "<table><thead><tr><th>Ora</th><th>Evento</th><th>Ticket</th>"
-        "<th>SL</th><th>TP</th><th>Profit</th><th>Bid</th><th>Ask</th></tr></thead><tbody>"
-        + ("".join(event_rows) if event_rows else "<tr><td colspan='8'>Nessun evento registrato.</td></tr>")
+    return (
+        "<table><thead><tr><th>Ora</th><th>Ticket</th><th>Apertura</th>"
+        "<th>SL</th><th>TP</th><th>Profit</th></tr></thead><tbody>"
+        + ("".join(event_rows) if event_rows else "<tr><td colspan='6'>Nessun trade chiuso registrato.</td></tr>")
         + "</tbody></table>"
     )
 
+
+def render_hero_info(last_api_call: Optional[sqlite3.Row], latest_error: Optional[sqlite3.Row]) -> str:
     if last_api_call:
         last_call_text = escape(format_timestamp_for_header(last_api_call["received_at"]))
     else:
         last_call_text = "Nessuna chiamata ricevuta"
 
-    if recent_errors:
-        error_items = []
-        for row in recent_errors:
-            error_items.append(
-                "<details class='error-item'>"
-                f"<summary>{escape(format_timestamp_for_table(row['created_at']))} | {escape(row['error_message'])}</summary>"
-                "<div class='error-body'>"
-                f"<p><strong>Path:</strong> <code>{escape(row['path'])}</code></p>"
-                f"<p><strong>Client:</strong> {escape(row['remote_addr'] or '-')}</p>"
-                f"<pre>{escape(row['payload_text'])}</pre>"
-                "</div>"
-                "</details>"
-            )
-        errors_html = "".join(error_items)
-    else:
-        errors_html = "<p class='meta'>Nessun errore registrato.</p>"
+    html = [f"<p class='meta'>Ultima Chiamata {last_call_text}</p>"]
+    if latest_error is not None:
+        html.append(
+            "<p class='meta error-inline'>"
+            f"Ultimo errore API {escape(format_timestamp_for_table(latest_error['created_at']))}: "
+            f"{escape(latest_error['error_message'])}"
+            "</p>"
+        )
+    return "".join(html)
 
+
+def render_dashboard_fragments(store: TradeStore) -> dict[str, str]:
+    current_trades = store.fetch_current_trades()
+    recent_events = store.fetch_recent_events()
+    last_api_call = store.fetch_last_api_call()
+    latest_errors = store.fetch_recent_errors(limit=1)
+    current_candle_states = store.fetch_recent_current_candle_states()
+    recent_closed_candles = store.fetch_recent_closed_candles()
+    return {
+        "hero_info_html": render_hero_info(last_api_call, latest_errors[0] if latest_errors else None),
+        "trade_table_html": render_trade_table(current_trades),
+        "recent_trades_html": render_recent_trades_table(recent_events),
+        "price_chart_html": polyline_price_chart(current_candle_states),
+        "candle_chart_html": candlestick_chart(recent_closed_candles),
+    }
+
+
+def render_homepage(store: TradeStore) -> str:
     dashboard_fragments = render_dashboard_fragments(store)
+    hero_info_html = dashboard_fragments["hero_info_html"]
+    trade_table_html = dashboard_fragments["trade_table_html"]
+    recent_trades_html = dashboard_fragments["recent_trades_html"]
     price_chart_html = dashboard_fragments["price_chart_html"]
     candle_chart_html = dashboard_fragments["candle_chart_html"]
 
@@ -919,20 +923,33 @@ def render_homepage(store: TradeStore) -> str:
     main {{ max-width: 1200px; margin: 0 auto; padding: 32px 20px 48px; }}
     h1, h2 {{ margin: 0 0 12px; }}
     .hero {{
+      display: grid;
+      grid-template-columns: minmax(320px, 0.42fr) minmax(420px, 0.58fr);
+      gap: 24px;
+      margin-bottom: 24px;
+      align-items: start;
+    }}
+    .hero-card,
+    .hero-side {{
       padding: 24px;
       border: 1px solid var(--line);
       background: var(--panel);
       border-radius: 18px;
       box-shadow: 0 18px 40px rgba(70, 49, 16, 0.08);
-      margin-bottom: 24px;
     }}
     .stack {{ display: grid; gap: 24px; }}
+    .split {{
+      display: grid;
+    }}
     section {{
       border: 1px solid var(--line);
       background: rgba(255,250,241,0.92);
       border-radius: 18px;
       padding: 20px;
       overflow-x: auto;
+    }}
+    .split section {{
+      margin: 0;
     }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     th, td {{ text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }}
@@ -949,19 +966,7 @@ def render_homepage(store: TradeStore) -> str:
       word-break: break-word;
     }}
     .meta {{ color: #5a5247; }}
-    .error-item {{
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: #fff6ec;
-      margin-bottom: 12px;
-    }}
-    .error-item summary {{
-      cursor: pointer;
-      padding: 12px 14px;
-      color: var(--bad);
-      font-weight: 700;
-    }}
-    .error-body {{ padding: 0 14px 14px; }}
+    .error-inline {{ color: var(--bad); }}
     .chart-meta {{
       margin-bottom: 10px;
       color: #5a5247;
@@ -994,23 +999,38 @@ def render_homepage(store: TradeStore) -> str:
     .chart-shell {{
       min-height: 140px;
     }}
+    @media (max-width: 980px) {{
+      .hero {{
+        grid-template-columns: 1fr;
+      }}
+      .split {{
+        grid-template-columns: 1fr;
+      }}
+    }}
   </style>
 </head>
 <body>
   <main>
     <div class="hero">
-      <h1>MT4 Trade Monitor</h1>
-      <p class="meta">Trade aperti correnti: <strong>{len(current_trades)}</strong></p>
-      <p class="meta">Ultima Chiamata {last_call_text}</p>
+      <div class="hero-card">
+        <h1>MT4 Trade Monitor</h1>
+        <div id="hero-info-panel">
+          {hero_info_html}
+        </div>
+      </div>
+      <section class="hero-side">
+        <h2>Trade in Corso</h2>
+        <div id="trade-table-panel">
+          {trade_table_html}
+        </div>
+      </section>
     </div>
     <div class="stack">
       <section>
-        <h2>Trade Aperti</h2>
-        {trade_table}
-      </section>
-      <section>
-        <h2>Ultimi Eventi</h2>
-        {event_table}
+        <h2>Ultimi Trade</h2>
+        <div id="recent-trades-panel">
+          {recent_trades_html}
+        </div>
       </section>
       <section>
         <h2>Ultimo Prezzo Intra-Minuto</h2>
@@ -1024,13 +1044,12 @@ def render_homepage(store: TradeStore) -> str:
           {candle_chart_html}
         </div>
       </section>
-      <section>
-        <h2>Errori API</h2>
-        {errors_html}
-      </section>
     </div>
   </main>
   <script>
+    const heroInfoPanel = document.getElementById("hero-info-panel");
+    const tradeTablePanel = document.getElementById("trade-table-panel");
+    const recentTradesPanel = document.getElementById("recent-trades-panel");
     const priceChartPanel = document.getElementById("price-chart-panel");
     const candleChartPanel = document.getElementById("candle-chart-panel");
 
@@ -1044,6 +1063,15 @@ def render_homepage(store: TradeStore) -> str:
           return;
         }}
         const payload = await response.json();
+        if (typeof payload.hero_info_html === "string") {{
+          heroInfoPanel.innerHTML = payload.hero_info_html;
+        }}
+        if (typeof payload.trade_table_html === "string") {{
+          tradeTablePanel.innerHTML = payload.trade_table_html;
+        }}
+        if (typeof payload.recent_trades_html === "string") {{
+          recentTradesPanel.innerHTML = payload.recent_trades_html;
+        }}
         if (typeof payload.price_chart_html === "string") {{
           priceChartPanel.innerHTML = payload.price_chart_html;
         }}
