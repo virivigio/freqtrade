@@ -4,11 +4,33 @@ import sqlite3
 from trade_monitor.core import (
     format_compact_time_from_epoch,
     format_price,
+    format_timestamp_for_header,
+    parse_timestamp,
     format_timestamp_for_table,
     render_hero_info,
     rounded_ten_bounds,
 )
 from trade_monitor.store import TradeStore
+
+
+def marker_style(event_type: str, side: str) -> tuple[str, str]:
+    color = "#176b3a" if side == "BUY" else "#9e2f21"
+    shape = "triangle-up" if event_type == "OPEN" and side == "BUY" else "triangle-down" if event_type == "OPEN" else "circle"
+    return color, shape
+
+
+def render_marker_svg(x: float, y: float, color: str, shape: str) -> str:
+    if shape == "triangle-up":
+        points = f"{x:.2f},{y - 8:.2f} {x - 7:.2f},{y + 6:.2f} {x + 7:.2f},{y + 6:.2f}"
+        return f"<polygon points='{points}' fill='{color}' stroke='#fffaf1' stroke-width='1.5' />"
+    if shape == "triangle-down":
+        points = f"{x:.2f},{y + 8:.2f} {x - 7:.2f},{y - 6:.2f} {x + 7:.2f},{y - 6:.2f}"
+        return f"<polygon points='{points}' fill='{color}' stroke='#fffaf1' stroke-width='1.5' />"
+    return f"<circle cx='{x:.2f}' cy='{y:.2f}' r='5.5' fill='none' stroke='{color}' stroke-width='2.5' />"
+
+
+def trade_markers(events: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    return [row for row in events if row["event_type"] in ("OPEN", "CLOSE")]
 
 
 def polyline_price_chart(rows: list[sqlite3.Row]) -> str:
@@ -64,7 +86,78 @@ def polyline_price_chart(rows: list[sqlite3.Row]) -> str:
     )
 
 
-def candlestick_chart(rows: list[sqlite3.Row]) -> str:
+def polyline_price_chart_with_markers(rows: list[sqlite3.Row], events: list[sqlite3.Row]) -> str:
+    if not rows:
+        return "<p class='meta'>Nessuno stato intra-minuto disponibile.</p>"
+
+    width = 1080
+    height = 280
+    padding_left = 54
+    padding_right = 18
+    padding_top = 18
+    padding_bottom = 34
+    values = [float(row["close"]) for row in rows]
+    min_value, max_value = rounded_ten_bounds(values)
+    usable_width = width - padding_left - padding_right
+    usable_height = height - padding_top - padding_bottom
+    step_x = usable_width / max(len(rows) - 1, 1)
+
+    def x_pos(index: int) -> float:
+        return padding_left + step_x * index
+
+    def y_pos(value: float) -> float:
+        return padding_top + (max_value - value) / (max_value - min_value) * usable_height
+
+    points = " ".join(f"{x_pos(i):.2f},{y_pos(value):.2f}" for i, value in enumerate(values))
+    last_price = values[-1]
+    last_y = y_pos(last_price)
+    label_indexes = sorted({0, len(rows) // 2, len(rows) - 1})
+    x_labels = "".join(
+        f"<text x='{x_pos(i):.2f}' y='{height - 10}' text-anchor='middle'>{escape(format_timestamp_for_table(rows[i]['captured_at']).split(' ')[1])}</text>"
+        for i in label_indexes
+    )
+    y_labels = []
+    tick_count = int((max_value - min_value) / 10.0) + 1
+    for tick in range(tick_count):
+        value = max_value - tick * 10.0
+        ratio = (max_value - value) / (max_value - min_value)
+        y = padding_top + usable_height * ratio
+        y_labels.append(
+            f"<text x='8' y='{y + 4:.2f}'>{format_price(value)}</text>"
+            f"<line x1='{padding_left}' y1='{y:.2f}' x2='{width - padding_right}' y2='{y:.2f}' class='chart-grid' />"
+        )
+
+    marker_items = []
+    state_times = [parse_timestamp(row["captured_at"]) for row in rows]
+    for event in trade_markers(events):
+        event_time = parse_timestamp(event["event_time"])
+        if event_time < state_times[0] or event_time > state_times[-1]:
+            continue
+        nearest_index = min(range(len(state_times)), key=lambda idx: abs((state_times[idx] - event_time).total_seconds()))
+        color, shape = marker_style(event["event_type"], event["side"])
+        marker_x = x_pos(nearest_index)
+        marker_y = y_pos(float(rows[nearest_index]["close"]))
+        marker_items.append(
+            "<g>"
+            f"<title>{escape(event['event_type'])} {escape(event['side'])} {escape(format_timestamp_for_header(event['event_time']))}</title>"
+            f"{render_marker_svg(marker_x, marker_y, color, shape)}"
+            "</g>"
+        )
+
+    return (
+        f"<div class='chart-meta'>Ultimi punti: <strong>{len(rows)}</strong> | Ultimo prezzo: <strong>{format_price(last_price)}</strong></div>"
+        f"<svg viewBox='0 0 {width} {height}' class='chart-svg' role='img' aria-label='Grafico ultimo prezzo intra-minuto'>"
+        f"<line x1='{padding_left}' y1='{last_y:.2f}' x2='{width - padding_right}' y2='{last_y:.2f}' class='chart-last-line' />"
+        f"{''.join(y_labels)}"
+        f"<polyline points='{points}' fill='none' stroke='#9c6b1a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' />"
+        f"<circle cx='{x_pos(len(rows) - 1):.2f}' cy='{last_y:.2f}' r='4.5' fill='#9c6b1a' />"
+        f"{''.join(marker_items)}"
+        f"{x_labels}"
+        "</svg>"
+    )
+
+
+def candlestick_chart(rows: list[sqlite3.Row], events: list[sqlite3.Row]) -> str:
     if not rows:
         return "<p class='meta'>Nessuna candela chiusa disponibile.</p>"
 
@@ -96,10 +189,12 @@ def candlestick_chart(rows: list[sqlite3.Row]) -> str:
         return padding_top + (max_value - value) / (max_value - min_value) * usable_height
 
     candle_shapes = []
+    candle_centers = {}
     for index, row in enumerate(slotted_rows):
         if row is None:
             continue
         center_x = x_center(index)
+        candle_centers[int(row["open_time"])] = center_x
         open_price = float(row["open"])
         high_price = float(row["high"])
         low_price = float(row["low"])
@@ -137,12 +232,28 @@ def candlestick_chart(rows: list[sqlite3.Row]) -> str:
 
     latest = rows_by_open_time[latest_open_time]
     shown_count = sum(1 for row in slotted_rows if row is not None)
+    marker_items = []
+    for event in trade_markers(events):
+        event_dt = parse_timestamp(event["event_time"])
+        bucket_open_time = int(event_dt.timestamp() // 60) * 60
+        if bucket_open_time not in candle_centers:
+            continue
+        center_x = candle_centers[bucket_open_time]
+        y = y_pos(float(event["open_price"]))
+        color, shape = marker_style(event["event_type"], event["side"])
+        marker_items.append(
+            "<g>"
+            f"<title>{escape(event['event_type'])} {escape(event['side'])} {escape(format_timestamp_for_header(event['event_time']))}</title>"
+            f"{render_marker_svg(center_x, y, color, shape)}"
+            "</g>"
+        )
     return (
         f"<div class='chart-meta'>Finestra: <strong>60 minuti</strong> | Candele presenti: <strong>{shown_count}</strong> | Ultima chiusa: <strong>{format_price(float(latest['close']))}</strong></div>"
         f"<svg viewBox='0 0 {width} {height}' class='chart-svg' role='img' aria-label='Grafico candele chiuse'>"
         f"{''.join(y_labels)}"
         f"{x_grids}"
         f"{''.join(candle_shapes)}"
+        f"{''.join(marker_items)}"
         f"{x_labels}"
         "</svg>"
     )
@@ -211,8 +322,8 @@ def render_dashboard_fragments(store: TradeStore) -> dict[str, str]:
         ),
         "trade_table_html": render_trade_table(current_trades),
         "recent_trades_html": render_recent_trades_table(recent_events),
-        "price_chart_html": polyline_price_chart(current_candle_states),
-        "candle_chart_html": candlestick_chart(recent_closed_candles),
+        "price_chart_html": polyline_price_chart_with_markers(current_candle_states, recent_events),
+        "candle_chart_html": candlestick_chart(recent_closed_candles, recent_events),
     }
 
 

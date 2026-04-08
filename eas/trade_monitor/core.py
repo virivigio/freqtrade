@@ -13,6 +13,7 @@ PORT = 80
 DB_PATH = Path(__file__).resolve().parent.parent / "trade_log.sqlite3"
 ITALY_TZ = ZoneInfo("Europe/Rome")
 PAYLOAD_FIELDS = (
+    "side",
     "open_price",
     "stop_loss",
     "take_profit",
@@ -88,8 +89,18 @@ def normalize_trade(raw_trade: dict) -> dict:
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("Trade ticket is required and must be an integer.") from exc
 
-    normalized = {"ticket": ticket, "symbol": symbol}
+    try:
+        side = str(raw_trade["side"]).upper()
+    except KeyError as exc:
+        raise ValueError("Trade field 'side' is required.") from exc
+
+    if side not in ("BUY", "SELL"):
+        raise ValueError("Trade field 'side' must be BUY or SELL.")
+
+    normalized = {"ticket": ticket, "symbol": symbol, "side": side}
     for field in PAYLOAD_FIELDS:
+        if field == "side":
+            continue
         try:
             normalized[field] = float(raw_trade[field])
         except (KeyError, TypeError, ValueError) as exc:

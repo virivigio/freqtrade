@@ -14,6 +14,7 @@ def sample_payload() -> dict:
             {
                 "ticket": 2001,
                 "symbol": "XAUUSD.s",
+                "side": "BUY",
                 "open_price": 2320.10,
                 "stop_loss": 2310.00,
                 "take_profit": 2340.00,

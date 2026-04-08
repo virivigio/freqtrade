@@ -18,6 +18,7 @@ def row_to_trade(row: dict) -> dict:
     return {
         "ticket": int(row["ticket"]),
         "symbol": row["symbol"],
+        "side": row["side"],
         "open_price": float(row["open_price"]),
         "stop_loss": float(row["stop_loss"]),
         "take_profit": float(row["take_profit"]),
@@ -50,6 +51,7 @@ class TradeStore:
                     ticket INTEGER NOT NULL,
                     event_type TEXT NOT NULL CHECK(event_type IN ('OPEN', 'UPDATE', 'CLOSE')),
                     symbol TEXT NOT NULL,
+                    side TEXT NOT NULL DEFAULT 'BUY' CHECK(side IN ('BUY', 'SELL')),
                     open_price REAL,
                     stop_loss REAL,
                     take_profit REAL,
@@ -63,6 +65,7 @@ class TradeStore:
                 CREATE TABLE IF NOT EXISTS current_trades (
                     ticket INTEGER PRIMARY KEY,
                     symbol TEXT NOT NULL,
+                    side TEXT NOT NULL DEFAULT 'BUY' CHECK(side IN ('BUY', 'SELL')),
                     opened_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     open_price REAL NOT NULL,
@@ -149,7 +152,25 @@ class TradeStore:
                 """,
                 (utc_now(),),
             )
+            self._ensure_trade_side_columns(connection)
             connection.commit()
+
+    def _ensure_trade_side_columns(self, connection: sqlite3.Connection) -> None:
+        trade_event_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(trade_events)").fetchall()
+        }
+        if "side" not in trade_event_columns:
+            connection.execute(
+                "ALTER TABLE trade_events ADD COLUMN side TEXT NOT NULL DEFAULT 'BUY' CHECK(side IN ('BUY', 'SELL'))"
+            )
+
+        current_trade_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(current_trades)").fetchall()
+        }
+        if "side" not in current_trade_columns:
+            connection.execute(
+                "ALTER TABLE current_trades ADD COLUMN side TEXT NOT NULL DEFAULT 'BUY' CHECK(side IN ('BUY', 'SELL'))"
+            )
 
     def ingest_trade_list(self, trades: list[dict]) -> dict:
         normalized = {trade["ticket"]: trade for trade in (normalize_trade(item) for item in trades)}
@@ -376,7 +397,7 @@ class TradeStore:
             return connection.execute(
                 """
                 SELECT ticket, symbol, opened_at, updated_at,
-                       open_price, stop_loss, take_profit, profit, bid, ask
+                       side, open_price, stop_loss, take_profit, profit, bid, ask
                 FROM current_trades
                 ORDER BY ticket
                 """,
@@ -387,7 +408,7 @@ class TradeStore:
             return connection.execute(
                 """
                 SELECT event_time, cycle_id, ticket, event_type,
-                       open_price, stop_loss, take_profit, profit, bid, ask, changed_fields
+                       side, open_price, stop_loss, take_profit, profit, bid, ask, changed_fields
                 FROM trade_events
                 ORDER BY id DESC
                 LIMIT ?
@@ -467,10 +488,10 @@ class TradeStore:
         connection.execute(
             """
             INSERT INTO trade_events (
-                event_time, cycle_id, ticket, event_type, symbol,
+                event_time, cycle_id, ticket, event_type, symbol, side,
                 open_price, stop_loss, take_profit, profit, bid, ask,
                 changed_fields, payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_time,
@@ -478,6 +499,7 @@ class TradeStore:
                 ticket,
                 event_type,
                 trade["symbol"],
+                trade["side"],
                 trade["open_price"],
                 trade["stop_loss"],
                 trade["take_profit"],
@@ -499,11 +521,12 @@ class TradeStore:
         connection.execute(
             """
             INSERT INTO current_trades (
-                ticket, symbol, opened_at, updated_at,
+                ticket, symbol, side, opened_at, updated_at,
                 open_price, stop_loss, take_profit, profit, bid, ask, payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticket) DO UPDATE SET
                 symbol = excluded.symbol,
+                side = excluded.side,
                 opened_at = excluded.opened_at,
                 updated_at = excluded.updated_at,
                 open_price = excluded.open_price,
@@ -517,6 +540,7 @@ class TradeStore:
             (
                 trade["ticket"],
                 trade["symbol"],
+                trade["side"],
                 opened_at,
                 updated_at,
                 trade["open_price"],

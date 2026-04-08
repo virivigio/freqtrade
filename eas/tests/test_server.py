@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ def sample_trade(
     ticket: int,
     *,
     symbol: str = "XAUUSD.s",
+    side: str = "BUY",
     open_price: float = 2320.10,
     stop_loss: float = 2310.00,
     take_profit: float = 2340.00,
@@ -20,6 +22,7 @@ def sample_trade(
     return {
         "ticket": ticket,
         "symbol": symbol,
+        "side": side,
         "open_price": open_price,
         "stop_loss": stop_loss,
         "take_profit": take_profit,
@@ -184,7 +187,6 @@ class ServerFunctionTests(unittest.TestCase):
         self.assertEqual(close_command["action"], "CLOSE")
 
     def test_render_dashboard_fragments_contains_live_sections(self) -> None:
-        self.store.ingest_trade_list([sample_trade(1003)])
         self.store.ingest_candles(
             [
                 sample_candle(1712610000, is_closed=True, close=4720.0, high=4725.0, low=4718.0),
@@ -194,6 +196,34 @@ class ServerFunctionTests(unittest.TestCase):
         self.store.record_api_call("/api/trades", "127.0.0.1", {"trades": []}, {"ok": True})
         self.store.record_api_error("/api/trades", "127.0.0.1", '{"test":true}', "Errore demo")
         self.store.set_commands_enabled(True)
+        marker_time = datetime.fromtimestamp(1712610000, tz=timezone.utc).isoformat()
+        with self.store._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO trade_events (
+                    event_time, cycle_id, ticket, event_type, symbol, side,
+                    open_price, stop_loss, take_profit, profit, bid, ask,
+                    changed_fields, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    marker_time,
+                    "cycle-marker",
+                    1003,
+                    "OPEN",
+                    "XAUUSD.s",
+                    "BUY",
+                    4721.0,
+                    4710.0,
+                    4730.0,
+                    0.0,
+                    4721.0,
+                    4721.2,
+                    "{}",
+                    "{}",
+                ),
+            )
+            connection.commit()
 
         fragments = server.render_dashboard_fragments(self.store)
 
@@ -203,6 +233,7 @@ class ServerFunctionTests(unittest.TestCase):
         self.assertIn("Ticket", fragments["trade_table_html"])
         self.assertIn("Ultimo prezzo", fragments["price_chart_html"])
         self.assertIn("Finestra: <strong>60 minuti</strong>", fragments["candle_chart_html"])
+        self.assertIn("<title>OPEN BUY", fragments["candle_chart_html"])
 
     def test_render_recent_trades_table_shows_only_close_events(self) -> None:
         self.store.ingest_trade_list([sample_trade(1004)])

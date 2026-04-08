@@ -73,6 +73,16 @@ string JsonEscape(string value)
 }
 
 
+string TradeSideToString(int orderType)
+{
+   if(orderType == OP_BUY)
+      return "BUY";
+   if(orderType == OP_SELL)
+      return "SELL";
+   return "UNKNOWN";
+}
+
+
 string TradeToJson(int index)
 {
    if(!OrderSelect(index, SELECT_BY_POS, MODE_TRADES))
@@ -88,6 +98,7 @@ string TradeToJson(int index)
    string json = "{";
    json += "\"ticket\":" + IntegerToString(OrderTicket()) + ",";
    json += "\"symbol\":\"" + JsonEscape(symbol) + "\",";
+   json += "\"side\":\"" + TradeSideToString(OrderType()) + "\",";
    json += "\"open_price\":" + DoubleToString(OrderOpenPrice(), symbolDigits) + ",";
    json += "\"stop_loss\":" + DoubleToString(OrderStopLoss(), symbolDigits) + ",";
    json += "\"take_profit\":" + DoubleToString(OrderTakeProfit(), symbolDigits) + ",";
