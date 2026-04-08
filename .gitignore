@@ -1,5 +1,5 @@
 user_data/logs/*
 user_data/backtest_results/*
 
-eas/__pycache__/
+**/__pycache__/
 eas/trade_log.sqlite*
