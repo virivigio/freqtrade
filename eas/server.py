@@ -10,11 +10,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 
 HOST = "0.0.0.0"
 PORT = 80
 DB_PATH = Path(__file__).with_name("trade_log.sqlite3")
+ITALY_TZ = ZoneInfo("Europe/Rome")
 PAYLOAD_FIELDS = (
     "open_price",
     "stop_loss",
@@ -31,6 +33,18 @@ EVENT_DIFF_FIELDS = (
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+def format_timestamp_for_table(value: str) -> str:
+    return parse_timestamp(value).astimezone(ITALY_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_timestamp_for_header(value: str) -> str:
+    return f"{format_timestamp_for_table(value)} ora italiana"
 
 
 class TradeStore:
@@ -415,7 +429,7 @@ def render_homepage(store: TradeStore) -> str:
             f"<td>{format_price(row['profit'])}</td>"
             f"<td>{format_price(row['bid'])}</td>"
             f"<td>{format_price(row['ask'])}</td>"
-            f"<td>{escape(row['updated_at'])}</td>"
+            f"<td>{escape(format_timestamp_for_table(row['updated_at']))}</td>"
             "</tr>"
         )
 
@@ -423,7 +437,7 @@ def render_homepage(store: TradeStore) -> str:
     for row in recent_events:
         event_rows.append(
             "<tr>"
-            f"<td>{escape(row['event_time'])}</td>"
+            f"<td>{escape(format_timestamp_for_table(row['event_time']))}</td>"
             f"<td>{escape(row['event_type'])}</td>"
             f"<td>{row['ticket']}</td>"
             f"<td>{format_price(row['stop_loss'])}</td>"
@@ -441,14 +455,14 @@ def render_homepage(store: TradeStore) -> str:
         + "</tbody></table>"
     )
     event_table = (
-        "<table><thead><tr><th>Ora UTC</th><th>Evento</th><th>Ticket</th>"
+        "<table><thead><tr><th>Ora</th><th>Evento</th><th>Ticket</th>"
         "<th>SL</th><th>TP</th><th>Profit</th><th>Bid</th><th>Ask</th></tr></thead><tbody>"
         + ("".join(event_rows) if event_rows else "<tr><td colspan='8'>Nessun evento registrato.</td></tr>")
         + "</tbody></table>"
     )
 
     if last_api_call:
-        last_call_text = escape(last_api_call["received_at"])
+        last_call_text = escape(format_timestamp_for_header(last_api_call["received_at"]))
     else:
         last_call_text = "Nessuna chiamata ricevuta"
 
@@ -457,7 +471,7 @@ def render_homepage(store: TradeStore) -> str:
         for row in recent_errors:
             error_items.append(
                 "<details class='error-item'>"
-                f"<summary>{escape(row['created_at'])} | {escape(row['error_message'])}</summary>"
+                f"<summary>{escape(format_timestamp_for_table(row['created_at']))} | {escape(row['error_message'])}</summary>"
                 "<div class='error-body'>"
                 f"<p><strong>Path:</strong> <code>{escape(row['path'])}</code></p>"
                 f"<p><strong>Client:</strong> {escape(row['remote_addr'] or '-')}</p>"

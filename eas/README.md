@@ -20,8 +20,6 @@ Homepage: `http://127.0.0.1/`
 
 Endpoint EA: `http://127.0.0.1/api/trades`
 
-Il server ascolta su `0.0.0.0:80`, quindi puo` essere raggiunto sia da `127.0.0.1`/`localhost` sia dall'IP LAN del Mac.
-
 SQLite locale: `trade_log.sqlite3`
 
 ## Payload atteso
@@ -52,8 +50,6 @@ Se un ticket sparisce da un invio successivo, il server registra un evento `CLOS
 3. In MT4 vai su `Tools -> Options -> Expert Advisors`.
 4. Aggiungi `http://127.0.0.1` agli URL permessi per `WebRequest`.
 5. Attacca l'EA a un chart qualsiasi.
-
-Se MT4 su macOS gira dentro Wine o un wrapper simile e `127.0.0.1` non funziona, prova anche con `http://localhost` oppure con l'IP LAN del Mac, per esempio `http://192.168.x.x`.
 
 ## Note implementative
 
