@@ -86,3 +86,27 @@ Impatto:
 - quando cambia `open_time` della candela corrente, gli snapshot del minuto precedente possono essere eliminati
 
 Da ricordare: per le candele chiuse non si aggiorna il record esistente; i duplicati vengono ignorati.
+
+## 2026-04-08 - Comandi Operativi Server Verso MT4
+
+Decisione: il server puo` restituire all'EA un oggetto `command` nella risposta del `POST /api/trades`.
+
+Motivo: preparare il sistema a una logica decisionale futura senza dipendere da un canale separato.
+
+Impatto:
+
+- il protocollo server->EA supporta `NONE`, `OPEN`, `CLOSE`
+- l'EA esegue il comando sul simbolo del chart corrente
+- il nome simbolo non viene cablato lato server
+
+## 2026-04-08 - Logica Demo Dei Comandi
+
+Decisione: in assenza della logica di decisione reale, il server usa una logica demo random.
+
+Motivo: tenere pronto il canale comando ed esercitare il ciclo completo richiesta-risposta-esecuzione su account demo.
+
+Impatto:
+
+- circa una volta ogni 30 secondi il server restituisce un comando diverso da `NONE`
+- se non ci sono trade, il comando demo apre un `BUY`
+- se c'e` almeno un trade, il comando demo prova a chiuderlo

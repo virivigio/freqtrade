@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import random
 import sqlite3
 import uuid
 from contextlib import closing
@@ -39,6 +40,8 @@ CANDLE_PAYLOAD_FIELDS = (
 CANDLE_TIMEFRAMES = {
     "M1": 60,
 }
+DEMO_COMMAND_PROBABILITY = 1 / 30
+DEMO_COMMAND_LOT = 0.01
 
 
 def utc_now() -> str:
@@ -62,6 +65,22 @@ def candle_close_time(open_time: int, timeframe: str) -> int:
         return open_time + CANDLE_TIMEFRAMES[timeframe]
     except KeyError as exc:
         raise ValueError(f"Unsupported candle timeframe '{timeframe}'.") from exc
+
+
+def decide_demo_command(trades: list[dict]) -> dict:
+    if random.random() >= DEMO_COMMAND_PROBABILITY:
+        return {"action": "NONE"}
+    if trades:
+        return {
+            "action": "CLOSE",
+            "reason": "demo_random_close_when_trade_exists",
+        }
+    return {
+        "action": "OPEN",
+        "side": "BUY",
+        "lot": DEMO_COMMAND_LOT,
+        "reason": "demo_random_open_when_no_trade_exists",
+    }
 
 
 class TradeStore:
@@ -788,13 +807,20 @@ def candlestick_chart(rows: list[sqlite3.Row]) -> str:
     )
 
 
+def render_dashboard_fragments(store: TradeStore) -> dict[str, str]:
+    current_candle_states = store.fetch_recent_current_candle_states()
+    recent_closed_candles = store.fetch_recent_closed_candles()
+    return {
+        "price_chart_html": polyline_price_chart(current_candle_states),
+        "candle_chart_html": candlestick_chart(recent_closed_candles),
+    }
+
+
 def render_homepage(store: TradeStore) -> str:
     current_trades = store.fetch_current_trades()
     recent_events = store.fetch_recent_events()
     last_api_call = store.fetch_last_api_call()
     recent_errors = store.fetch_recent_errors()
-    current_candle_states = store.fetch_recent_current_candle_states()
-    recent_closed_candles = store.fetch_recent_closed_candles()
 
     trade_rows = []
     for row in current_trades:
@@ -861,8 +887,9 @@ def render_homepage(store: TradeStore) -> str:
     else:
         errors_html = "<p class='meta'>Nessun errore registrato.</p>"
 
-    price_chart_html = polyline_price_chart(current_candle_states)
-    candle_chart_html = candlestick_chart(recent_closed_candles)
+    dashboard_fragments = render_dashboard_fragments(store)
+    price_chart_html = dashboard_fragments["price_chart_html"]
+    candle_chart_html = dashboard_fragments["candle_chart_html"]
 
     return f"""<!doctype html>
 <html lang="it">
@@ -964,6 +991,9 @@ def render_homepage(store: TradeStore) -> str:
       font-size: 11px;
       font-family: Georgia, "Times New Roman", serif;
     }}
+    .chart-shell {{
+      min-height: 140px;
+    }}
   </style>
 </head>
 <body>
@@ -984,11 +1014,15 @@ def render_homepage(store: TradeStore) -> str:
       </section>
       <section>
         <h2>Ultimo Prezzo Intra-Minuto</h2>
-        {price_chart_html}
+        <div id="price-chart-panel" class="chart-shell">
+          {price_chart_html}
+        </div>
       </section>
       <section>
         <h2>Candele Chiuse</h2>
-        {candle_chart_html}
+        <div id="candle-chart-panel" class="chart-shell">
+          {candle_chart_html}
+        </div>
       </section>
       <section>
         <h2>Errori API</h2>
@@ -996,6 +1030,33 @@ def render_homepage(store: TradeStore) -> str:
       </section>
     </div>
   </main>
+  <script>
+    const priceChartPanel = document.getElementById("price-chart-panel");
+    const candleChartPanel = document.getElementById("candle-chart-panel");
+
+    async function refreshDashboard() {{
+      try {{
+        const response = await fetch("/api/dashboard", {{
+          headers: {{ "Accept": "application/json" }},
+          cache: "no-store"
+        }});
+        if (!response.ok) {{
+          return;
+        }}
+        const payload = await response.json();
+        if (typeof payload.price_chart_html === "string") {{
+          priceChartPanel.innerHTML = payload.price_chart_html;
+        }}
+        if (typeof payload.candle_chart_html === "string") {{
+          candleChartPanel.innerHTML = payload.candle_chart_html;
+        }}
+      }} catch (error) {{
+        console.debug("Dashboard refresh failed", error);
+      }}
+    }}
+
+    window.setInterval(refreshDashboard, 1000);
+  </script>
 </body>
 </html>"""
 
@@ -1015,10 +1076,14 @@ class TradeRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        store = self.get_store()
+        if parsed.path == "/api/dashboard":
+            self._json_response(HTTPStatus.OK, render_dashboard_fragments(store))
+            return
         if parsed.path != "/":
             self._json_response(HTTPStatus.NOT_FOUND, {"error": "Not found"})
             return
-        html = render_homepage(self.get_store()).encode("utf-8")
+        html = render_homepage(store).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(html)))
@@ -1047,6 +1112,7 @@ class TradeRequestHandler(BaseHTTPRequestHandler):
             result = {
                 "trades": store.ingest_trade_list(trades),
                 "candles": store.ingest_candles(candles),
+                "command": decide_demo_command(trades),
             }
             store.record_api_call(parsed.path, remote_addr, payload, result)
         except ValueError as exc:

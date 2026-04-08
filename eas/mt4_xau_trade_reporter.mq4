@@ -3,6 +3,10 @@
 input string ServerUrl = "http://127.0.0.1/api/trades";
 input int TimerSeconds = 1;
 input int CandleCount = 10;
+input double CommandLotSize = 0.01;
+input int CommandSlippagePoints = 30;
+input int CommandMagicNumber = 424242;
+input string CommandComment = "mt4_trade_monitor";
 
 
 string WebRequestErrorText(int errorCode)
@@ -26,6 +30,26 @@ int CountTrackedTrades()
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+
+      if(OrderType() != OP_BUY && OrderType() != OP_SELL)
+         continue;
+
+      count++;
+   }
+   return count;
+}
+
+
+int CountSymbolTrades(string symbol)
+{
+   int count = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+
+      if(OrderSymbol() != symbol)
          continue;
 
       if(OrderType() != OP_BUY && OrderType() != OP_SELL)
@@ -172,6 +196,202 @@ string BuildPayload()
 }
 
 
+int FindJsonKey(string json, string key)
+{
+   return StringFind(json, "\"" + key + "\"");
+}
+
+
+string ExtractJsonString(string json, string key, string fallback)
+{
+   int keyPos = FindJsonKey(json, key);
+   if(keyPos < 0)
+      return fallback;
+
+   int colonPos = StringFind(json, ":", keyPos);
+   if(colonPos < 0)
+      return fallback;
+
+   int pos = colonPos + 1;
+   while(pos < StringLen(json))
+   {
+      int ch = StringGetCharacter(json, pos);
+      if(ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n')
+         break;
+      pos++;
+   }
+
+   if(pos >= StringLen(json) || StringGetCharacter(json, pos) != '"')
+      return fallback;
+
+   int start = pos + 1;
+   int end = StringFind(json, "\"", start);
+   if(end < 0)
+      return fallback;
+
+   return StringSubstr(json, start, end - start);
+}
+
+
+double ExtractJsonNumber(string json, string key, double fallback)
+{
+   int keyPos = FindJsonKey(json, key);
+   if(keyPos < 0)
+      return fallback;
+
+   int colonPos = StringFind(json, ":", keyPos);
+   if(colonPos < 0)
+      return fallback;
+
+   int start = colonPos + 1;
+   while(start < StringLen(json))
+   {
+      int ch = StringGetCharacter(json, start);
+      if(ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n')
+         break;
+      start++;
+   }
+
+   int end = start;
+   while(end < StringLen(json))
+   {
+      int ch = StringGetCharacter(json, end);
+      if((ch >= '0' && ch <= '9') || ch == '.' || ch == '-')
+      {
+         end++;
+         continue;
+      }
+      break;
+   }
+
+   if(end <= start)
+      return fallback;
+
+   return StrToDouble(StringSubstr(json, start, end - start));
+}
+
+
+bool OpenTradeFromCommand(string side, double lotSize)
+{
+   string symbol = Symbol();
+   int type = OP_BUY;
+   if(side == "SELL")
+      type = OP_SELL;
+
+   RefreshRates();
+   double price = MarketInfo(symbol, type == OP_BUY ? MODE_ASK : MODE_BID);
+   int ticket = OrderSend(
+      symbol,
+      type,
+      lotSize,
+      price,
+      CommandSlippagePoints,
+      0,
+      0,
+      CommandComment,
+      CommandMagicNumber,
+      0,
+      clrNONE
+   );
+
+   if(ticket < 0)
+   {
+      int errorCode = GetLastError();
+      Print("Command OPEN failed. symbol=", symbol,
+            " side=", side,
+            " lot=", DoubleToString(lotSize, 2),
+            " error=", errorCode);
+      return false;
+   }
+
+   Print("Command OPEN executed. symbol=", symbol,
+         " side=", side,
+         " lot=", DoubleToString(lotSize, 2),
+         " ticket=", ticket);
+   return true;
+}
+
+
+bool CloseTradesFromCommand()
+{
+   string symbol = Symbol();
+   bool closedAny = false;
+
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+
+      if(OrderSymbol() != symbol)
+         continue;
+
+      int type = OrderType();
+      if(type != OP_BUY && type != OP_SELL)
+         continue;
+
+      RefreshRates();
+      double price = (type == OP_BUY) ? MarketInfo(symbol, MODE_BID) : MarketInfo(symbol, MODE_ASK);
+      bool ok = OrderClose(OrderTicket(), OrderLots(), price, CommandSlippagePoints, clrNONE);
+      if(!ok)
+      {
+         int errorCode = GetLastError();
+         Print("Command CLOSE failed. symbol=", symbol,
+               " ticket=", OrderTicket(),
+               " error=", errorCode);
+         continue;
+      }
+
+      closedAny = true;
+      Print("Command CLOSE executed. symbol=", symbol,
+            " ticket=", OrderTicket());
+   }
+
+   return closedAny;
+}
+
+
+void HandleServerCommand(string response)
+{
+   string action = ExtractJsonString(response, "action", "NONE");
+   if(action == "NONE")
+      return;
+
+   string symbol = Symbol();
+   int symbolTradeCount = CountSymbolTrades(symbol);
+
+   if(action == "OPEN")
+   {
+      if(symbolTradeCount > 0)
+      {
+         Print("Command OPEN ignored because symbol already has trades. symbol=", symbol,
+               " trade_count=", symbolTradeCount);
+         return;
+      }
+
+      string side = ExtractJsonString(response, "side", "BUY");
+      double lotSize = ExtractJsonNumber(response, "lot", CommandLotSize);
+      if(lotSize <= 0)
+         lotSize = CommandLotSize;
+
+      OpenTradeFromCommand(side, lotSize);
+      return;
+   }
+
+   if(action == "CLOSE")
+   {
+      if(symbolTradeCount <= 0)
+      {
+         Print("Command CLOSE ignored because symbol has no open trades. symbol=", symbol);
+         return;
+      }
+      CloseTradesFromCommand();
+      return;
+   }
+
+   Print("Unknown command action received. action=", action, " body=", response);
+}
+
+
 void SendTrades()
 {
    string body = BuildPayload();
@@ -210,6 +430,9 @@ void SendTrades()
          " trades=", tradeCount,
          " headers=", responseHeaders,
          " body=", response);
+
+   if(status >= 200 && status < 300)
+      HandleServerCommand(response);
 }
 
 

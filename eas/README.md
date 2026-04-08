@@ -6,6 +6,7 @@ Server HTTP scritto in Python standard library. Riceve una lista di trade aperti
 
 - accetta `POST /api/trades` con un payload JSON contenente `trades`
 - accetta nello stesso payload anche `candles` con le ultime 10 candele `M1`
+- risponde all'EA con un oggetto `command` che puo` essere eseguito sul simbolo del chart
 - non impone alcun simbolo lato codice
 - registra su SQLite gli eventi `OPEN` e `CLOSE`, e gli `UPDATE` solo quando cambiano `SL` o `TP`
 - mantiene una proiezione dello stato corrente per mostrare i trade aperti nella homepage
@@ -72,6 +73,39 @@ Se un ticket sparisce da un invio successivo, il server registra un evento `CLOS
 
 Per le candele, l'EA invia sempre le ultime 10 barre `M1`: le 9 chiuse piu` recenti e la candela corrente. Il server salva le chiuse con inserimento incrementale e registra tutti gli snapshot intra-minuto della candela aperta corrente.
 
+## Risposta del server all'EA
+
+Il server puo` restituire un comando operativo nella risposta al `POST /api/trades`.
+
+Esempio:
+
+```json
+{
+  "trades": {
+    "received_trades": 0
+  },
+  "candles": {
+    "received_candles": 10
+  },
+  "command": {
+    "action": "OPEN",
+    "side": "BUY",
+    "lot": 0.01,
+    "reason": "demo_random_open_when_no_trade_exists"
+  }
+}
+```
+
+Azioni supportate:
+
+- `NONE`
+- `OPEN`
+- `CLOSE`
+
+L'EA esegue il comando sempre sul simbolo del chart corrente, senza leggere un simbolo dalla risposta del server. Questo evita di cablare nomi broker-specifici come `XAUUSD`, `XAUUSD.s` o `XAUUSD.p`.
+
+Nello stato attuale la logica decisionale del server e` solo demo: circa una volta ogni 30 secondi prova ad aprire un trade `BUY` se non ce ne sono, oppure a chiudere i trade aperti se ce n'e` almeno uno.
+
 ## Installazione EA in MT4
 
 1. Copia [`mt4_xau_trade_reporter.mq4`](/Users/virgilio/Documents/Code/freqtrade/eas/mt4_xau_trade_reporter.mq4) nella cartella `MQL4/Experts`.
@@ -89,3 +123,4 @@ Per le candele, l'EA invia sempre le ultime 10 barre `M1`: le 9 chiuse piu` rece
 - L'ultima chiamata ricevuta è salvata in `api_calls`.
 - Gli errori API sono salvati in `api_errors`.
 - Il codice non filtra per simbolo: assume che l'EA invii un insieme coerente di trade.
+- I comandi `OPEN` e `CLOSE` vengono eseguiti dall'EA sul simbolo del chart corrente.
