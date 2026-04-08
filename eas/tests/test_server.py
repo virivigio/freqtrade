@@ -149,6 +149,13 @@ class TradeStoreTests(unittest.TestCase):
         self.assertEqual(current_rows[0][0], 1712610180)
         self.assertEqual(float(current_rows[0][1]), 2322.2)
 
+    def test_commands_enabled_defaults_to_disabled_and_can_toggle(self) -> None:
+        self.assertFalse(self.store.get_commands_enabled())
+        self.assertTrue(self.store.set_commands_enabled(True))
+        self.assertTrue(self.store.get_commands_enabled())
+        self.assertFalse(self.store.set_commands_enabled(False))
+        self.assertFalse(self.store.get_commands_enabled())
+
 
 class ServerFunctionTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -160,17 +167,19 @@ class ServerFunctionTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_decide_demo_command_returns_none_when_probability_not_met(self) -> None:
-        with patch("server.random.random", return_value=0.9):
+        with patch("trade_monitor.core.random.random", return_value=0.9):
             command = server.decide_demo_command([])
         self.assertEqual(command, {"action": "NONE"})
 
     def test_decide_demo_command_opens_without_trades_and_closes_with_trades(self) -> None:
-        with patch("server.random.random", return_value=0.0):
+        with patch("trade_monitor.core.random.random", return_value=0.0), patch(
+            "trade_monitor.core.random.choice", return_value="SELL"
+        ):
             open_command = server.decide_demo_command([])
             close_command = server.decide_demo_command([sample_trade(1)])
 
         self.assertEqual(open_command["action"], "OPEN")
-        self.assertEqual(open_command["side"], "BUY")
+        self.assertEqual(open_command["side"], "SELL")
         self.assertEqual(open_command["lot"], server.DEMO_COMMAND_LOT)
         self.assertEqual(close_command["action"], "CLOSE")
 
@@ -184,11 +193,13 @@ class ServerFunctionTests(unittest.TestCase):
         )
         self.store.record_api_call("/api/trades", "127.0.0.1", {"trades": []}, {"ok": True})
         self.store.record_api_error("/api/trades", "127.0.0.1", '{"test":true}', "Errore demo")
+        self.store.set_commands_enabled(True)
 
         fragments = server.render_dashboard_fragments(self.store)
 
         self.assertIn("Ultima Chiamata", fragments["hero_info_html"])
         self.assertIn("Ultimo errore API", fragments["hero_info_html"])
+        self.assertIn("Disabilita Apertura Trade", fragments["hero_info_html"])
         self.assertIn("Ticket", fragments["trade_table_html"])
         self.assertIn("Ultimo prezzo", fragments["price_chart_html"])
         self.assertIn("Finestra: <strong>60 minuti</strong>", fragments["candle_chart_html"])
