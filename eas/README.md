@@ -91,7 +91,9 @@ Esempio:
     "action": "OPEN",
     "side": "BUY",
     "lot": 0.01,
-    "reason": "demo_random_open_when_no_trade_exists"
+    "stop_loss": 4708.20,
+    "take_profit": 4716.20,
+    "reason": "reversal_after_drop_long_2c"
   }
 }
 ```
@@ -104,17 +106,32 @@ Azioni supportate:
 
 L'EA esegue il comando sempre sul simbolo del chart corrente, senza leggere un simbolo dalla risposta del server. Questo evita di cablare nomi broker-specifici come `XAUUSD`, `XAUUSD.s` o `XAUUSD.p`.
 
-Nello stato attuale la logica decisionale del server e` solo demo: circa una volta ogni 80 secondi prova ad aprire un trade `BUY` o `SELL` se non ce ne sono, oppure a chiudere i trade aperti se ce n'e` almeno uno.
+Per i comandi `OPEN`, il server puo` includere anche `stop_loss` e `take_profit` assoluti. L'EA li passa direttamente a `OrderSend()`.
 
 ## Strategia
 
-La funzione decisionale dei trade vive in [trade_monitor/strategy.py](/Users/virgilio/Documents/Code/freqtrade/eas/trade_monitor/strategy.py).
+Le strategie vivono nella cartella [trade_monitor/strategies](/Users/virgilio/Documents/Code/freqtrade/eas/trade_monitor/strategies).
 
-Entry point attuale:
+Contratto comune attuale:
 
-- `decide_trade_command(trades)`
+- ultime `60` candele chiuse `M1`
+- fino a `60` snapshot della candela `M1` corrente
+- trade corrente aperto, oppure assente
 
-Per ora implementa ancora una logica demo/random, ma il modulo e` separato dal server ed e` il punto previsto per la logica production-ready futura.
+Entry point usato dal server:
+
+- `trade_monitor.strategies.decide_trade_command(context)`
+
+La strategia attiva corrente e` `reversal_after_drop.py`.
+
+Regole attuali:
+
+- cerca una discesa di almeno `7 USD` in `1-3` candele chiuse consecutive
+- richiede poi `1` candela di stabilizzazione
+- entra `BUY` quando la candela corrente recupera almeno `2 USD` sopra il `close` della candela immediatamente precedente alla stabilizzazione
+- imposta `TP = +3 USD` e `SL = -5 USD` rispetto al prezzo di ingresso stimato
+
+Il file `random_demo.py` resta disponibile solo come strategia separata di test, non come fallback automatico.
 
 ## Installazione EA in MT4
 

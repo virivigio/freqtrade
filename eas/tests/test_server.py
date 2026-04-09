@@ -2,10 +2,10 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
 
 import server
-from trade_monitor.strategy import DEFAULT_COMMAND_LOT, decide_trade_command
+from trade_monitor.strategies import DEFAULT_COMMAND_LOT, decide_trade_command
+from trade_monitor.strategies.base import StrategyContext
 
 
 def sample_trade(
@@ -170,22 +170,56 @@ class ServerFunctionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_decide_trade_command_returns_none_when_probability_not_met(self) -> None:
-        with patch("trade_monitor.strategy.random.random", return_value=0.9):
-            command = decide_trade_command([])
+    def build_strategy_context(self, current_trade=None) -> StrategyContext:
+        return StrategyContext(
+            closed_candles=[],
+            current_candle_states=[],
+            current_trade=current_trade,
+        )
+
+    def test_decide_trade_command_returns_none_without_setup(self) -> None:
+        command = decide_trade_command(self.build_strategy_context())
         self.assertEqual(command, {"action": "NONE"})
 
-    def test_decide_trade_command_opens_without_trades_and_closes_with_trades(self) -> None:
-        with patch("trade_monitor.strategy.random.random", return_value=0.0), patch(
-            "trade_monitor.strategy.random.choice", return_value="SELL"
-        ):
-            open_command = decide_trade_command([])
-            close_command = decide_trade_command([sample_trade(1)])
+    def test_decide_trade_command_opens_long_after_drop_setup(self) -> None:
+        context = StrategyContext(
+            closed_candles=[
+                sample_candle(1712610000, is_closed=True, open=4720.0, high=4720.0, low=4716.0, close=4716.0),
+                sample_candle(1712610060, is_closed=True, open=4716.0, high=4716.0, low=4711.0, close=4711.0),
+                sample_candle(1712610120, is_closed=True, open=4711.2, high=4712.0, low=4710.8, close=4711.4),
+            ],
+            current_candle_states=[
+                {
+                    "close": 4713.2,
+                }
+            ],
+            current_trade=None,
+        )
 
-        self.assertEqual(open_command["action"], "OPEN")
-        self.assertEqual(open_command["side"], "SELL")
-        self.assertEqual(open_command["lot"], DEFAULT_COMMAND_LOT)
-        self.assertEqual(close_command["action"], "CLOSE")
+        command = decide_trade_command(context)
+
+        self.assertEqual(command["action"], "OPEN")
+        self.assertEqual(command["side"], "BUY")
+        self.assertEqual(command["lot"], DEFAULT_COMMAND_LOT)
+        self.assertEqual(command["stop_loss"], 4708.2)
+        self.assertEqual(command["take_profit"], 4716.2)
+
+    def test_decide_trade_command_returns_none_when_trade_already_exists(self) -> None:
+        context = StrategyContext(
+            closed_candles=[
+                sample_candle(1712610000, is_closed=True, open=4720.0, high=4720.0, low=4716.0, close=4716.0),
+                sample_candle(1712610060, is_closed=True, open=4716.0, high=4716.0, low=4711.0, close=4711.0),
+                sample_candle(1712610120, is_closed=True, open=4711.2, high=4712.0, low=4710.8, close=4711.4),
+            ],
+            current_candle_states=[
+                {
+                    "close": 4713.2,
+                }
+            ],
+            current_trade=sample_trade(1),
+        )
+        command = decide_trade_command(context)
+        self.assertEqual(command, {"action": "NONE"})
 
     def test_render_dashboard_fragments_contains_live_sections(self) -> None:
         self.store.ingest_candles(

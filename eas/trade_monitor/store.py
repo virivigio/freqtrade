@@ -403,6 +403,18 @@ class TradeStore:
                 """,
             ).fetchall()
 
+    def fetch_current_trade(self) -> Optional[sqlite3.Row]:
+        with closing(self._connect()) as connection:
+            return connection.execute(
+                """
+                SELECT ticket, symbol, opened_at, updated_at,
+                       side, open_price, stop_loss, take_profit, profit, bid, ask
+                FROM current_trades
+                ORDER BY opened_at, ticket
+                LIMIT 1
+                """
+            ).fetchone()
+
     def fetch_recent_events(self, limit: int = 50) -> list[sqlite3.Row]:
         with closing(self._connect()) as connection:
             return connection.execute(

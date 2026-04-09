@@ -300,7 +300,14 @@ double ExtractJsonNumber(string json, string key, double fallback)
 }
 
 
-bool OpenTradeFromCommand(string side, double lotSize)
+double NormalizePriceForSymbol(string symbol, double price)
+{
+   int digits = (int)MarketInfo(symbol, MODE_DIGITS);
+   return NormalizeDouble(price, digits);
+}
+
+
+bool OpenTradeFromCommand(string side, double lotSize, double stopLoss, double takeProfit)
 {
    string symbol = Symbol();
    int type = OP_BUY;
@@ -309,14 +316,18 @@ bool OpenTradeFromCommand(string side, double lotSize)
 
    RefreshRates();
    double price = MarketInfo(symbol, type == OP_BUY ? MODE_ASK : MODE_BID);
+   if(stopLoss > 0)
+      stopLoss = NormalizePriceForSymbol(symbol, stopLoss);
+   if(takeProfit > 0)
+      takeProfit = NormalizePriceForSymbol(symbol, takeProfit);
    int ticket = OrderSend(
       symbol,
       type,
       lotSize,
       price,
       CommandSlippagePoints,
-      0,
-      0,
+      stopLoss,
+      takeProfit,
       CommandComment,
       CommandMagicNumber,
       0,
@@ -399,10 +410,12 @@ void HandleServerCommand(string response)
 
       string side = ExtractJsonString(response, "side", "BUY");
       double lotSize = ExtractJsonNumber(response, "lot", CommandLotSize);
+      double stopLoss = ExtractJsonNumber(response, "stop_loss", 0);
+      double takeProfit = ExtractJsonNumber(response, "take_profit", 0);
       if(lotSize <= 0)
          lotSize = CommandLotSize;
 
-      OpenTradeFromCommand(side, lotSize);
+      OpenTradeFromCommand(side, lotSize, stopLoss, takeProfit);
       return;
    }
 

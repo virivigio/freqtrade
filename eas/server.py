@@ -7,7 +7,8 @@ from urllib.parse import urlparse
 
 from trade_monitor.core import DB_PATH, HOST, PORT, parse_payload
 from trade_monitor.dashboard import render_dashboard_fragments, render_homepage, render_recent_trades_table
-from trade_monitor.strategy import decide_trade_command
+from trade_monitor.strategies import decide_trade_command
+from trade_monitor.strategies.base import StrategyContext
 from trade_monitor.store import TradeStore
 
 
@@ -60,10 +61,20 @@ class TradeRequestHandler(BaseHTTPRequestHandler):
             payload = parse_payload(body)
             trades = payload["trades"]
             candles = payload.get("candles", [])
-            command = decide_trade_command(trades) if store.get_commands_enabled() else {"action": "NONE"}
+            trade_result = store.ingest_trade_list(trades)
+            candle_result = store.ingest_candles(candles)
+            command = {"action": "NONE"}
+            if store.get_commands_enabled():
+                command = decide_trade_command(
+                    StrategyContext(
+                        closed_candles=store.fetch_recent_closed_candles(limit=60),
+                        current_candle_states=store.fetch_recent_current_candle_states(limit=60),
+                        current_trade=store.fetch_current_trade(),
+                    )
+                )
             result = {
-                "trades": store.ingest_trade_list(trades),
-                "candles": store.ingest_candles(candles),
+                "trades": trade_result,
+                "candles": candle_result,
                 "command": command,
             }
             store.record_api_call(parsed.path, remote_addr, payload, result)

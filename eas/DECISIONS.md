@@ -119,5 +119,29 @@ Motivo: isolare la logica decisionale e preparare il passaggio da strategia demo
 
 Impatto:
 
-- il punto di ingresso della decisione e` `trade_monitor/strategy.py`
+- il punto di ingresso della decisione e` il package `trade_monitor/strategies/`
 - `server.py` usa il risultato della strategia ma non contiene piu` la logica decisionale
+
+## 2026-04-09 - Contratto Unico Per Le Strategie
+
+Decisione: tutte le strategie ricevono un contesto uniforme composto da `60` candele chiuse `M1`, fino a `60` stati della candela `M1` corrente e l'eventuale trade corrente aperto.
+
+Motivo: evitare strategie accoppiate al DB o al payload grezzo, e rendere il progetto coerente attorno a una sola finestra operativa.
+
+Impatto:
+
+- le strategie vivono in `trade_monitor/strategies/`, una per file
+- il server costruisce il contesto dopo l'ingestione dei dati ricevuti
+- la strategia attiva corrente e` definita esplicitamente nel package `trade_monitor/strategies/`
+
+## 2026-04-09 - Strategia Attiva Reversal After Drop
+
+Decisione: attivare una strategia reale `reversal_after_drop` e lasciare `random_demo` solo come strategia separata di test.
+
+Motivo: il sistema non deve piu` avere la demo random come comportamento implicito o fallback.
+
+Impatto:
+
+- la strategia attiva apre solo nuovi trade; non emette chiusure casuali
+- l'uscita del trade e` affidata a `stop_loss` e `take_profit` inviati all'EA
+- la logica attiva cerca una discesa di almeno `7 USD` in `1-3` candele, una candela di stabilizzazione e un recupero live di `2 USD` prima dell'ingresso
