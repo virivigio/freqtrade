@@ -133,13 +133,22 @@ datetime BrokerTimeToUtc(datetime brokerTime)
 }
 
 
+datetime NormalizeOpenTime(datetime value, int timeframe)
+{
+   int timeframeSeconds = PeriodSeconds(timeframe);
+   if(timeframeSeconds <= 0)
+      return value;
+   return value - (value % timeframeSeconds);
+}
+
+
 string CandleToJson(string symbol, int timeframe, int shift)
 {
    datetime openTime = iTime(symbol, timeframe, shift);
    if(openTime <= 0)
       return "";
 
-   datetime openTimeUtc = BrokerTimeToUtc(openTime);
+   datetime openTimeUtc = NormalizeOpenTime(BrokerTimeToUtc(openTime), timeframe);
 
    int digits = (int)MarketInfo(symbol, MODE_DIGITS);
    string json = "{";

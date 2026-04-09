@@ -56,6 +56,14 @@ def candle_close_time(open_time: int, timeframe: str) -> int:
         raise ValueError(f"Unsupported candle timeframe '{timeframe}'.") from exc
 
 
+def normalize_candle_open_time(open_time: int, timeframe: str) -> int:
+    try:
+        timeframe_seconds = CANDLE_TIMEFRAMES[timeframe]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported candle timeframe '{timeframe}'.") from exc
+    return open_time - (open_time % timeframe_seconds)
+
+
 def normalize_trade(raw_trade: dict) -> dict:
     if not isinstance(raw_trade, dict):
         raise ValueError("Each trade must be an object.")
@@ -106,7 +114,7 @@ def normalize_candle(raw_candle: dict) -> dict:
     normalized = {
         "symbol": symbol,
         "timeframe": timeframe,
-        "open_time": open_time,
+        "open_time": normalize_candle_open_time(open_time, timeframe),
     }
     for field in CANDLE_PAYLOAD_FIELDS:
         try:
