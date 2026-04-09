@@ -2,7 +2,7 @@
 
 input string ServerUrl = "http://127.0.0.1/api/trades";
 input int TimerSeconds = 1;
-input int CandleCount = 10;
+input int CandleCount = 60;
 input double CommandLotSize = 0.01;
 input int CommandSlippagePoints = 30;
 input int CommandMagicNumber = 424242;
@@ -344,10 +344,6 @@ bool OpenTradeFromCommand(string side, double lotSize, double stopLoss, double t
       return false;
    }
 
-   Print("Command OPEN executed. symbol=", symbol,
-         " side=", side,
-         " lot=", DoubleToString(lotSize, 2),
-         " ticket=", ticket);
    return true;
 }
 
@@ -382,8 +378,6 @@ bool CloseTradesFromCommand()
       }
 
       closedAny = true;
-      Print("Command CLOSE executed. symbol=", symbol,
-            " ticket=", OrderTicket());
    }
 
    return closedAny;
@@ -402,11 +396,7 @@ void HandleServerCommand(string response)
    if(action == "OPEN")
    {
       if(symbolTradeCount > 0)
-      {
-         Print("Command OPEN ignored because symbol already has trades. symbol=", symbol,
-               " trade_count=", symbolTradeCount);
          return;
-      }
 
       string side = ExtractJsonString(response, "side", "BUY");
       double lotSize = ExtractJsonNumber(response, "lot", CommandLotSize);
@@ -422,10 +412,7 @@ void HandleServerCommand(string response)
    if(action == "CLOSE")
    {
       if(symbolTradeCount <= 0)
-      {
-         Print("Command CLOSE ignored because symbol has no open trades. symbol=", symbol);
          return;
-      }
       CloseTradesFromCommand();
       return;
    }
@@ -448,11 +435,6 @@ void SendTrades()
    string responseHeaders = "";
    int timeout = 3000;
 
-   Print("Trade sync request url=", ServerUrl,
-         " trades=", tradeCount,
-         " payload_bytes=", ArraySize(payload),
-         " payload=", body);
-
    ResetLastError();
    int status = WebRequest("POST", ServerUrl, headers, timeout, payload, result, responseHeaders);
 
@@ -467,20 +449,21 @@ void SendTrades()
    }
 
    string response = CharArrayToString(result, 0, -1, CP_UTF8);
-   Print("Trade sync response. url=", ServerUrl,
+   if(status >= 200 && status < 300)
+   {
+      HandleServerCommand(response);
+      return;
+   }
+
+   Print("HTTP request returned error status. url=", ServerUrl,
          " status=", status,
          " trades=", tradeCount,
-         " headers=", responseHeaders,
          " body=", response);
-
-   if(status >= 200 && status < 300)
-      HandleServerCommand(response);
 }
 
 
 int OnInit()
 {
-   Print("EA init. timer_seconds=", TimerSeconds, " server_url=", ServerUrl);
    EventSetTimer(TimerSeconds);
    return(INIT_SUCCEEDED);
 }
@@ -488,7 +471,6 @@ int OnInit()
 
 void OnDeinit(const int reason)
 {
-   Print("EA deinit. reason=", reason);
    EventKillTimer();
 }
 
