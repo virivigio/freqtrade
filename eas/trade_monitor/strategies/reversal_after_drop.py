@@ -2,13 +2,14 @@ from trade_monitor.strategies.base import StrategyContext
 
 
 DEFAULT_COMMAND_LOT = 0.01
+MAX_IMPULSE_CANDLES = 5
 IMPULSE_THRESHOLD = 5.0
 TRIGGER_RECOVERY = 1.0
 TAKE_PROFIT_DISTANCE = 3.0
 STOP_LOSS_DISTANCE = 4.0
-STABILIZATION_MAX_RANGE = 3.0
-STABILIZATION_MAX_BODY = 1.5
-STABILIZATION_MAX_EXTENSION = 1.0
+STABILIZATION_MAX_RANGE = 4.0
+STABILIZATION_MAX_BODY = 2.0
+STABILIZATION_MAX_EXTENSION = 1.5
 
 
 def candle_body(candle) -> float:
@@ -77,7 +78,7 @@ def try_long_setup(closed_candles: list, live_price: float) -> dict | None:
     stabilization = closed_candles[-1]
     last_rejection = None
     # Scan the most recent 1-3 closed candles before stabilization as the impulse leg.
-    for impulse_size in range(1, 6):
+    for impulse_size in range(1, MAX_IMPULSE_CANDLES + 1):
         if len(closed_candles) < impulse_size + 1:
             continue
         impulse = closed_candles[-(impulse_size + 1) : -1]
@@ -150,7 +151,7 @@ def try_short_setup(closed_candles: list, live_price: float) -> dict | None:
     stabilization = closed_candles[-1]
     last_rejection = None
     # Symmetric scan for an upward impulse in the most recent 1-3 closed candles.
-    for impulse_size in range(1, 6):
+    for impulse_size in range(1, MAX_IMPULSE_CANDLES + 1):
         if len(closed_candles) < impulse_size + 1:
             continue
         impulse = closed_candles[-(impulse_size + 1) : -1]

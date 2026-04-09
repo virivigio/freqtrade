@@ -219,7 +219,7 @@ class ServerFunctionTests(unittest.TestCase):
         self.assertEqual(command["action"], "OPEN")
         self.assertEqual(command["side"], "BUY")
         self.assertEqual(command["lot"], DEFAULT_COMMAND_LOT)
-        self.assertEqual(command["stop_loss"], 4708.2)
+        self.assertEqual(command["stop_loss"], 4709.2)
         self.assertEqual(command["take_profit"], 4716.2)
         self.assertEqual(result["insight"]["phase"], "signal_ready")
         self.assertEqual(result["insight"]["direction"], "BUY")
