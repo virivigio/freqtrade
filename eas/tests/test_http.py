@@ -122,6 +122,7 @@ class HttpEndpointTests(unittest.TestCase):
 
         self.assertEqual(status["status"], 200)
         self.assertIn("hero_info_html", payload)
+        self.assertIn("strategy_html", payload)
         self.assertIn("trade_table_html", payload)
         self.assertIn("recent_trades_html", payload)
         self.assertIn("price_chart_html", payload)
@@ -136,7 +137,7 @@ class HttpEndpointTests(unittest.TestCase):
             headers={"Content-Length": str(len(body))},
         )
 
-        with patch("server.decide_trade_command", return_value={"action": "OPEN", "side": "BUY", "lot": 0.01}):
+        with patch("server.decide_trade_command", return_value={"command": {"action": "OPEN", "side": "BUY", "lot": 0.01}, "insight": {"phase": "signal_ready"}}):
             handler.do_POST()
 
         payload = self.read_json_body(handler)
@@ -183,7 +184,7 @@ class HttpEndpointTests(unittest.TestCase):
             body=body,
             headers={"Content-Length": str(len(body))},
         )
-        with patch("server.decide_trade_command", return_value={"action": "CLOSE"}):
+        with patch("server.decide_trade_command", return_value={"command": {"action": "CLOSE"}, "insight": {"phase": "close_signal"}}):
             handler.do_POST()
 
         payload = self.read_json_body(handler)

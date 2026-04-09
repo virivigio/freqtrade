@@ -147,8 +147,11 @@ class TradeStore:
             )
             connection.execute(
                 """
-                INSERT OR IGNORE INTO app_state (key, value, updated_at)
+                INSERT INTO app_state (key, value, updated_at)
                 VALUES ('commands_enabled', '0', ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = '0',
+                    updated_at = excluded.updated_at
                 """,
                 (utc_now(),),
             )

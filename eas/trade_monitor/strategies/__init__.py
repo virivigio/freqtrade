@@ -9,7 +9,13 @@ ACTIVE_STRATEGY = "reversal_after_drop"
 
 def decide_trade_command(context: StrategyContext) -> dict:
     if ACTIVE_STRATEGY == "reversal_after_drop":
-        return decide_reversal_after_drop_command(context)
-    if ACTIVE_STRATEGY == "random_demo":
-        return decide_random_demo_trade_command(context)
-    raise ValueError(f"Unsupported active strategy '{ACTIVE_STRATEGY}'.")
+        result = decide_reversal_after_drop_command(context)
+    elif ACTIVE_STRATEGY == "random_demo":
+        result = decide_random_demo_trade_command(context)
+    else:
+        raise ValueError(f"Unsupported active strategy '{ACTIVE_STRATEGY}'.")
+    insight = dict(result.get("insight", {}))
+    insight.setdefault("strategy", ACTIVE_STRATEGY)
+    result["insight"] = insight
+    result.setdefault("command", {"action": "NONE"})
+    return result

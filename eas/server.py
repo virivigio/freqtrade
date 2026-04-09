@@ -63,9 +63,9 @@ class TradeRequestHandler(BaseHTTPRequestHandler):
             candles = payload.get("candles", [])
             trade_result = store.ingest_trade_list(trades)
             candle_result = store.ingest_candles(candles)
-            command = {"action": "NONE"}
+            strategy_result = {"command": {"action": "NONE"}, "insight": {}}
             if store.get_commands_enabled():
-                command = decide_trade_command(
+                strategy_result = decide_trade_command(
                     StrategyContext(
                         closed_candles=store.fetch_recent_closed_candles(limit=60),
                         current_candle_states=store.fetch_recent_current_candle_states(limit=60),
@@ -75,7 +75,7 @@ class TradeRequestHandler(BaseHTTPRequestHandler):
             result = {
                 "trades": trade_result,
                 "candles": candle_result,
-                "command": command,
+                "command": strategy_result["command"],
             }
             store.record_api_call(parsed.path, remote_addr, payload, result)
         except ValueError as exc:

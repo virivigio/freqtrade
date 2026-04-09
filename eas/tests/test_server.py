@@ -178,8 +178,9 @@ class ServerFunctionTests(unittest.TestCase):
         )
 
     def test_decide_trade_command_returns_none_without_setup(self) -> None:
-        command = decide_trade_command(self.build_strategy_context())
-        self.assertEqual(command, {"action": "NONE"})
+        result = decide_trade_command(self.build_strategy_context())
+        self.assertEqual(result["command"], {"action": "NONE"})
+        self.assertIn("strategy", result["insight"])
 
     def test_decide_trade_command_opens_long_after_drop_setup(self) -> None:
         context = StrategyContext(
@@ -196,13 +197,16 @@ class ServerFunctionTests(unittest.TestCase):
             current_trade=None,
         )
 
-        command = decide_trade_command(context)
+        result = decide_trade_command(context)
+        command = result["command"]
 
         self.assertEqual(command["action"], "OPEN")
         self.assertEqual(command["side"], "BUY")
         self.assertEqual(command["lot"], DEFAULT_COMMAND_LOT)
         self.assertEqual(command["stop_loss"], 4708.2)
         self.assertEqual(command["take_profit"], 4716.2)
+        self.assertEqual(result["insight"]["phase"], "signal_ready")
+        self.assertEqual(result["insight"]["direction"], "BUY")
 
     def test_decide_trade_command_returns_none_when_trade_already_exists(self) -> None:
         context = StrategyContext(
@@ -218,8 +222,9 @@ class ServerFunctionTests(unittest.TestCase):
             ],
             current_trade=sample_trade(1),
         )
-        command = decide_trade_command(context)
-        self.assertEqual(command, {"action": "NONE"})
+        result = decide_trade_command(context)
+        self.assertEqual(result["command"], {"action": "NONE"})
+        self.assertEqual(result["insight"]["phase"], "in_trade")
 
     def test_render_dashboard_fragments_contains_live_sections(self) -> None:
         self.store.ingest_candles(
@@ -265,6 +270,7 @@ class ServerFunctionTests(unittest.TestCase):
         self.assertIn("Ultima Chiamata", fragments["hero_info_html"])
         self.assertIn("Ultimo errore API", fragments["hero_info_html"])
         self.assertIn("Disabilita Apertura Trade", fragments["hero_info_html"])
+        self.assertIn("strategy", fragments["strategy_html"])
         self.assertIn("Side", fragments["trade_table_html"])
         self.assertIn("Ticket", fragments["trade_table_html"])
         self.assertIn("Ultimo prezzo", fragments["price_chart_html"])

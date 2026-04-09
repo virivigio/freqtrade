@@ -1,4 +1,5 @@
 from html import escape
+import json
 import sqlite3
 
 from trade_monitor.core import (
@@ -11,6 +12,8 @@ from trade_monitor.core import (
     rounded_ten_bounds,
 )
 from trade_monitor.store import TradeStore
+from trade_monitor.strategies import decide_trade_command
+from trade_monitor.strategies.base import StrategyContext
 
 
 def marker_style(event_type: str, side: str) -> tuple[str, str]:
@@ -362,6 +365,14 @@ def render_recent_trades_table(recent_events: list[sqlite3.Row]) -> str:
     )
 
 
+def render_strategy_box(strategy_result: dict) -> str:
+    insight = strategy_result.get("insight", {})
+    if not insight:
+        return "<p class='meta'>Nessun dato strategia disponibile.</p>"
+    dumped = json.dumps(insight, ensure_ascii=False, indent=2)
+    return f"<pre class='strategy-dump'>{escape(dumped)}</pre>"
+
+
 def render_dashboard_fragments(store: TradeStore) -> dict[str, str]:
     current_trades = store.fetch_current_trades()
     recent_events = store.fetch_recent_events()
@@ -370,12 +381,20 @@ def render_dashboard_fragments(store: TradeStore) -> dict[str, str]:
     commands_enabled = store.get_commands_enabled()
     current_candle_states = store.fetch_recent_current_candle_states()
     recent_closed_candles = store.fetch_recent_closed_candles()
+    strategy_result = decide_trade_command(
+        StrategyContext(
+            closed_candles=recent_closed_candles,
+            current_candle_states=current_candle_states,
+            current_trade=store.fetch_current_trade(),
+        )
+    )
     return {
         "hero_info_html": render_hero_info(
             last_api_call,
             latest_errors[0] if latest_errors else None,
             commands_enabled,
         ),
+        "strategy_html": render_strategy_box(strategy_result),
         "trade_table_html": render_trade_table(current_trades),
         "recent_trades_html": render_recent_trades_table(recent_events),
         "price_chart_html": polyline_price_chart_with_markers(current_candle_states, recent_events),
@@ -386,10 +405,11 @@ def render_dashboard_fragments(store: TradeStore) -> dict[str, str]:
 def render_homepage(store: TradeStore) -> str:
     dashboard_fragments = render_dashboard_fragments(store)
     hero_info_html = dashboard_fragments["hero_info_html"]
-    trade_table_html = dashboard_fragments["trade_table_html"]
+    strategy_html = dashboard_fragments["strategy_html"]
     recent_trades_html = dashboard_fragments["recent_trades_html"]
     price_chart_html = dashboard_fragments["price_chart_html"]
     candle_chart_html = dashboard_fragments["candle_chart_html"]
+    trade_table_html = dashboard_fragments["trade_table_html"]
 
     return f"""<!doctype html>
 <html lang="it">
@@ -504,6 +524,13 @@ def render_homepage(store: TradeStore) -> str:
     .chart-shell {{
       min-height: 140px;
     }}
+    .strategy-dump {{
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: #40372d;
+    }}
     @media (max-width: 980px) {{
       .hero {{
         grid-template-columns: 1fr;
@@ -521,17 +548,17 @@ def render_homepage(store: TradeStore) -> str:
         </div>
       </div>
       <section class="hero-side">
-        <h2>Trade in Corso</h2>
-        <div id="trade-table-panel">
-          {trade_table_html}
+        <h2>Strategia</h2>
+        <div id="strategy-panel">
+          {strategy_html}
         </div>
       </section>
     </div>
     <div class="stack">
       <section>
-        <h2>Ultimi Trade</h2>
-        <div id="recent-trades-panel">
-          {recent_trades_html}
+        <h2>Candele Chiuse</h2>
+        <div id="candle-chart-panel" class="chart-shell">
+          {candle_chart_html}
         </div>
       </section>
       <section>
@@ -541,15 +568,22 @@ def render_homepage(store: TradeStore) -> str:
         </div>
       </section>
       <section>
-        <h2>Candele Chiuse</h2>
-        <div id="candle-chart-panel" class="chart-shell">
-          {candle_chart_html}
+        <h2>Trade in Corso</h2>
+        <div id="trade-table-panel">
+          {trade_table_html}
+        </div>
+      </section>
+      <section>
+        <h2>Ultimi Trade</h2>
+        <div id="recent-trades-panel">
+          {recent_trades_html}
         </div>
       </section>
     </div>
   </main>
   <script>
     const heroInfoPanel = document.getElementById("hero-info-panel");
+    const strategyPanel = document.getElementById("strategy-panel");
     const tradeTablePanel = document.getElementById("trade-table-panel");
     const recentTradesPanel = document.getElementById("recent-trades-panel");
     const priceChartPanel = document.getElementById("price-chart-panel");
@@ -567,6 +601,9 @@ def render_homepage(store: TradeStore) -> str:
         const payload = await response.json();
         if (typeof payload.hero_info_html === "string") {{
           heroInfoPanel.innerHTML = payload.hero_info_html;
+        }}
+        if (typeof payload.strategy_html === "string") {{
+          strategyPanel.innerHTML = payload.strategy_html;
         }}
         if (typeof payload.trade_table_html === "string") {{
           tradeTablePanel.innerHTML = payload.trade_table_html;
