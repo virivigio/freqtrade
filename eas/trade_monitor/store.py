@@ -262,17 +262,26 @@ class TradeStore:
         if len(current_candles) > 1:
             raise ValueError("Payload must include at most one current candle.")
 
-        inserted_closed = 0
+        stored_closed = 0
         inserted_current_states = 0
 
         with closing(self._connect()) as connection:
             for candle in closed_candles:
                 cursor = connection.execute(
                     """
-                    INSERT OR IGNORE INTO closed_candles (
+                    INSERT INTO closed_candles (
                         symbol, timeframe, open_time, close_time,
                         open, high, low, close, volume, payload_json, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(symbol, timeframe, open_time) DO UPDATE SET
+                        close_time = excluded.close_time,
+                        open = excluded.open,
+                        high = excluded.high,
+                        low = excluded.low,
+                        close = excluded.close,
+                        volume = excluded.volume,
+                        payload_json = excluded.payload_json,
+                        created_at = excluded.created_at
                     """,
                     (
                         candle["symbol"],
@@ -288,7 +297,7 @@ class TradeStore:
                         utc_now(),
                     ),
                 )
-                inserted_closed += cursor.rowcount
+                stored_closed += cursor.rowcount
 
             if current_candles:
                 candle = current_candles[0]
@@ -325,7 +334,7 @@ class TradeStore:
 
         return {
             "received_candles": len(candles),
-            "inserted_closed_candles": inserted_closed,
+            "inserted_closed_candles": stored_closed,
             "inserted_current_candle_states": inserted_current_states,
         }
 

@@ -2,10 +2,10 @@ from trade_monitor.strategies.base import StrategyContext
 
 
 DEFAULT_COMMAND_LOT = 0.01
-IMPULSE_THRESHOLD = 7.0
-TRIGGER_RECOVERY = 2.0
+IMPULSE_THRESHOLD = 5.0
+TRIGGER_RECOVERY = 1.0
 TAKE_PROFIT_DISTANCE = 3.0
-STOP_LOSS_DISTANCE = 5.0
+STOP_LOSS_DISTANCE = 4.0
 STABILIZATION_MAX_RANGE = 3.0
 STABILIZATION_MAX_BODY = 1.5
 STABILIZATION_MAX_EXTENSION = 1.0
@@ -25,7 +25,32 @@ def current_price(context: StrategyContext) -> float | None:
     return float(context.current_candle_states[-1]["close"])
 
 
+def command_is_open(result: dict | None) -> bool:
+    return result is not None and result.get("command", {}).get("action") == "OPEN"
+
+
+def insight_priority(result: dict | None) -> int:
+    if result is None:
+        return -1
+    phase = result.get("insight", {}).get("phase", "idle")
+    priorities = {
+        "signal_ready": 3,
+        "waiting_trigger": 2,
+        "waiting_stabilization": 1,
+        "idle": 0,
+    }
+    return priorities.get(phase, 0)
+
+
+def insight_impulse_value(result: dict | None) -> float:
+    if result is None:
+        return -1.0
+    return float(result.get("insight", {}).get("impulse_value", -1.0))
+
+
 def is_long_stabilization(stabilization, impulse_last) -> bool:
+    # Treat stabilization as a small pause candle: limited range, small body,
+    # and no meaningful breakdown below where the impulse leg had just stopped.
     return (
         candle_range(stabilization) <= STABILIZATION_MAX_RANGE
         and candle_body(stabilization) <= STABILIZATION_MAX_BODY
@@ -34,6 +59,8 @@ def is_long_stabilization(stabilization, impulse_last) -> bool:
 
 
 def is_short_stabilization(stabilization, impulse_last) -> bool:
+    # Symmetric pause after an upward impulse: limited range, small body,
+    # and no meaningful breakout above where the impulse leg had just stopped.
     return (
         candle_range(stabilization) <= STABILIZATION_MAX_RANGE
         and candle_body(stabilization) <= STABILIZATION_MAX_BODY
@@ -45,13 +72,25 @@ def try_long_setup(closed_candles: list, live_price: float) -> dict | None:
     if len(closed_candles) < 2:
         return None
 
+    # Long setup = sharp drop in the last 1-3 closed candles, then one pause candle,
+    # then a live recovery strong enough to confirm the reversal attempt.
     stabilization = closed_candles[-1]
+    last_rejection = None
     # Scan the most recent 1-3 closed candles before stabilization as the impulse leg.
-    for impulse_size in range(1, 4):
+    for impulse_size in range(1, 6):
         if len(closed_candles) < impulse_size + 1:
             continue
         impulse = closed_candles[-(impulse_size + 1) : -1]
         if any(float(candle["close"]) >= float(candle["open"]) for candle in impulse):
+            last_rejection = {
+                "command": {"action": "NONE"},
+                "insight": {
+                    "phase": "idle",
+                    "direction": "BUY",
+                    "impulse_candles": impulse_size,
+                    "reason": "impulse_not_all_bearish",
+                },
+            }
             continue
 
         first_open = float(impulse[0]["open"])
@@ -71,6 +110,14 @@ def try_long_setup(closed_candles: list, live_price: float) -> dict | None:
             "recovery_needed": round(TRIGGER_RECOVERY, 2),
         }
         if drop < IMPULSE_THRESHOLD:
+            last_rejection = {
+                "command": {"action": "NONE"},
+                "insight": {
+                    **insight,
+                    "phase": "idle",
+                    "reason": "impulse_below_threshold",
+                },
+            }
             continue
 
         # After the drop, require one closed candle that looks like a pause rather than a fresh breakdown.
@@ -93,7 +140,7 @@ def try_long_setup(closed_candles: list, live_price: float) -> dict | None:
             },
             "insight": insight,
         }
-    return None
+    return last_rejection
 
 
 def try_short_setup(closed_candles: list, live_price: float) -> dict | None:
@@ -101,12 +148,22 @@ def try_short_setup(closed_candles: list, live_price: float) -> dict | None:
         return None
 
     stabilization = closed_candles[-1]
+    last_rejection = None
     # Symmetric scan for an upward impulse in the most recent 1-3 closed candles.
-    for impulse_size in range(1, 4):
+    for impulse_size in range(1, 6):
         if len(closed_candles) < impulse_size + 1:
             continue
         impulse = closed_candles[-(impulse_size + 1) : -1]
         if any(float(candle["close"]) <= float(candle["open"]) for candle in impulse):
+            last_rejection = {
+                "command": {"action": "NONE"},
+                "insight": {
+                    "phase": "idle",
+                    "direction": "SELL",
+                    "impulse_candles": impulse_size,
+                    "reason": "impulse_not_all_bullish",
+                },
+            }
             continue
 
         first_open = float(impulse[0]["open"])
@@ -126,6 +183,14 @@ def try_short_setup(closed_candles: list, live_price: float) -> dict | None:
             "recovery_needed": round(TRIGGER_RECOVERY, 2),
         }
         if rise < IMPULSE_THRESHOLD:
+            last_rejection = {
+                "command": {"action": "NONE"},
+                "insight": {
+                    **insight,
+                    "phase": "idle",
+                    "reason": "impulse_below_threshold",
+                },
+            }
             continue
 
         # Require a pause after the rally before allowing the reversal trigger.
@@ -148,7 +213,7 @@ def try_short_setup(closed_candles: list, live_price: float) -> dict | None:
             },
             "insight": insight,
         }
-    return None
+    return last_rejection
 
 
 def decide_trade_command(context: StrategyContext) -> dict:
@@ -173,14 +238,25 @@ def decide_trade_command(context: StrategyContext) -> dict:
             },
         }
 
-    signal = try_long_setup(context.closed_candles, live_price)
-    if signal is not None:
-        return signal
+    long_result = try_long_setup(context.closed_candles, live_price)
+    short_result = try_short_setup(context.closed_candles, live_price)
 
-    # If no long reversal is active, evaluate the symmetric short setup on the same window.
-    signal = try_short_setup(context.closed_candles, live_price)
-    if signal is not None:
-        return signal
+    if command_is_open(long_result):
+        return long_result
+    if command_is_open(short_result):
+        return short_result
+
+    if insight_priority(short_result) > insight_priority(long_result):
+        return short_result
+    if insight_priority(long_result) > insight_priority(short_result):
+        return long_result
+    if insight_impulse_value(short_result) > insight_impulse_value(long_result):
+        return short_result
+
+    if long_result is not None:
+        return long_result
+    if short_result is not None:
+        return short_result
 
     return {
         "command": {"action": "NONE"},

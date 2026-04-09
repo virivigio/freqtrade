@@ -111,7 +111,7 @@ class TradeStoreTests(unittest.TestCase):
         self.assertEqual(float(current_trade["profit"]), 25.0)
         self.assertEqual(float(current_trade["bid"]), 2325.0)
 
-    def test_ingest_candles_inserts_closed_ignores_duplicates_and_rotates_current_states(self) -> None:
+    def test_ingest_candles_upserts_closed_and_rotates_current_states(self) -> None:
         result_first = self.store.ingest_candles(
             [
                 sample_candle(1712610000, is_closed=True, close=2320.0),
@@ -129,7 +129,7 @@ class TradeStoreTests(unittest.TestCase):
                 sample_candle(1712610120, is_closed=False, close=2321.7, volume=18),
             ]
         )
-        self.assertEqual(result_second["inserted_closed_candles"], 0)
+        self.assertEqual(result_second["inserted_closed_candles"], 2)
         self.assertEqual(result_second["inserted_current_candle_states"], 1)
 
         result_third = self.store.ingest_candles(
@@ -139,7 +139,7 @@ class TradeStoreTests(unittest.TestCase):
                 sample_candle(1712610180, is_closed=False, close=2322.2, volume=5),
             ]
         )
-        self.assertEqual(result_third["inserted_closed_candles"], 1)
+        self.assertEqual(result_third["inserted_closed_candles"], 2)
         self.assertEqual(result_third["inserted_current_candle_states"], 1)
 
         with self.store._connect() as connection:
@@ -182,6 +182,22 @@ class ServerFunctionTests(unittest.TestCase):
         self.assertEqual(result["command"], {"action": "NONE"})
         self.assertIn("strategy", result["insight"])
 
+    def test_decide_trade_command_exposes_rejection_reason_when_impulse_is_too_small(self) -> None:
+        context = StrategyContext(
+            closed_candles=[
+                sample_candle(1712610000, is_closed=True, open=4720.0, high=4720.0, low=4718.5, close=4718.8),
+                sample_candle(1712610060, is_closed=True, open=4719.0, high=4719.4, low=4718.4, close=4718.9),
+            ],
+            current_candle_states=[{"close": 4720.0}],
+            current_trade=None,
+        )
+
+        result = decide_trade_command(context)
+
+        self.assertEqual(result["command"], {"action": "NONE"})
+        self.assertEqual(result["insight"]["direction"], "BUY")
+        self.assertEqual(result["insight"]["reason"], "impulse_below_threshold")
+
     def test_decide_trade_command_opens_long_after_drop_setup(self) -> None:
         context = StrategyContext(
             closed_candles=[
@@ -207,6 +223,42 @@ class ServerFunctionTests(unittest.TestCase):
         self.assertEqual(command["take_profit"], 4716.2)
         self.assertEqual(result["insight"]["phase"], "signal_ready")
         self.assertEqual(result["insight"]["direction"], "BUY")
+
+    def test_decide_trade_command_prefers_short_path_over_irrelevant_long_rejection(self) -> None:
+        context = StrategyContext(
+            closed_candles=[
+                sample_candle(1712610000, is_closed=True, open=4700.0, high=4704.5, low=4700.0, close=4704.0),
+                sample_candle(1712610060, is_closed=True, open=4704.0, high=4708.5, low=4704.0, close=4708.0),
+                sample_candle(1712610120, is_closed=True, open=4708.1, high=4708.6, low=4707.7, close=4708.2),
+            ],
+            current_candle_states=[{"close": 4705.8}],
+            current_trade=None,
+        )
+
+        result = decide_trade_command(context)
+
+        self.assertEqual(result["command"]["action"], "OPEN")
+        self.assertEqual(result["command"]["side"], "SELL")
+        self.assertEqual(result["insight"]["direction"], "SELL")
+        self.assertEqual(result["insight"]["phase"], "signal_ready")
+
+    def test_decide_trade_command_prefers_higher_impulse_value_when_both_paths_are_idle(self) -> None:
+        context = StrategyContext(
+            closed_candles=[
+                sample_candle(1712610000, is_closed=True, open=4740.67, high=4743.25, low=4740.59, close=4743.24),
+                sample_candle(1712610060, is_closed=True, open=4743.24, high=4745.72, low=4743.17, close=4743.96),
+                sample_candle(1712610120, is_closed=True, open=4743.96, high=4744.65, low=4743.01, close=4744.48),
+                sample_candle(1712610180, is_closed=True, open=4744.41, high=4746.09, low=4744.15, close=4745.05),
+            ],
+            current_candle_states=[{"close": 4745.1}],
+            current_trade=None,
+        )
+
+        result = decide_trade_command(context)
+
+        self.assertEqual(result["command"], {"action": "NONE"})
+        self.assertEqual(result["insight"]["direction"], "SELL")
+        self.assertEqual(result["insight"]["reason"], "impulse_below_threshold")
 
     def test_decide_trade_command_returns_none_when_trade_already_exists(self) -> None:
         context = StrategyContext(
