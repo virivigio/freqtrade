@@ -110,7 +110,7 @@ Per i comandi `OPEN`, il server puo` includere anche `stop_loss` e `take_profit`
 
 ## Strategia
 
-Le strategie vivono nella cartella [trade_monitor/strategies](/Users/virgilio/Documents/Code/freqtrade/eas/trade_monitor/strategies).
+Le strategie vivono nella cartella [trade_monitor/strategies](/Users/virgilio/Documents/Code/freqtrade/eas-ws/trade_monitor/strategies).
 
 Contratto comune attuale:
 
@@ -135,7 +135,7 @@ Il file `random_demo.py` resta disponibile solo come strategia separata di test,
 
 ## Installazione EA in MT4
 
-1. Copia [`mt4_xau_trade_reporter.mq4`](/Users/virgilio/Documents/Code/freqtrade/eas/mt4_xau_trade_reporter.mq4) nella cartella `MQL4/Experts`.
+1. Copia [`mt4_xau_trade_reporter.mq4`](/Users/virgilio/Documents/Code/freqtrade/eas-ws/mt4_xau_trade_reporter.mq4) nella cartella `MQL4/Experts`.
 2. Compila l'EA da MetaEditor.
 3. In MT4 vai su `Tools -> Options -> Expert Advisors`.
 4. Aggiungi `http://127.0.0.1` agli URL permessi per `WebRequest`.
